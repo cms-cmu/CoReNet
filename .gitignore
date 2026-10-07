@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+runs/
+slurm-*.out
+logs/
+examples/data/*_all.h5
+.venv/
+.pixi/

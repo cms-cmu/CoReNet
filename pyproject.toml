@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "CoReNet"
+version = "0.1.0"
+description = "CoReNet (Combinatorial Residual Network): a decay-chain-configurable neural network for event classification in collider physics"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{ name = "[author list to be confirmed]" }]
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.21",
+    "h5py>=3.0",
+    "pyyaml>=5.4",
+    "scikit-learn>=1.0",
+]
+
+[project.optional-dependencies]
+export = ["onnx>=1.14", "onnxruntime>=1.15"]
+test = ["pytest>=7"]
+
+[project.scripts]
+corenet-train = "corenet.train:main"
+corenet-evaluate = "corenet.evaluate:cli"
+corenet-export = "corenet.export:cli"
+corenet-validate = "corenet.validate:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

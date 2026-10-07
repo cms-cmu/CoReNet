@@ -1,0 +1,47 @@
+# Reproducible environment for CoReNet, pinned the same way as the research repository (conda-forge builds of
+# PyTorch with their own CUDA/cuDNN, so the same binaries install on any linux-64 machine):
+#   pixi install -e gpu      # CUDA build of PyTorch (any NVIDIA GPU supported by CUDA 12, Volta and newer)
+#   pixi install             # CPU build
+#   pixi run -e gpu corenet-train --help
+# pixi.lock records the exact versions; commit it with the code.
+[workspace]
+name = "corenet"
+version = "0.1.0"
+description = "CoReNet (Combinatorial Residual Network): a decay-chain-configurable neural network for event classification in collider physics"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = ">=3.13,<3.14"
+pip = "*"
+numpy = "*"
+h5py = "*"
+pyyaml = "*"
+scikit-learn = "*"
+pytest = "*"
+onnx = "*"
+onnxruntime = "*"
+
+[pypi-dependencies]
+corenet = { path = ".", editable = true }
+
+[feature.cpu]
+platforms = ["linux-64"]
+
+[feature.cpu.dependencies]
+pytorch-cpu = ">=2.12.1,<3"
+
+[feature.gpu]
+platforms = ["linux-64"]
+system-requirements = { cuda = "12.0" }
+
+[feature.gpu.dependencies]
+pytorch-gpu = ">=2.12.1,<3"
+cuda-version = "12.9.*"
+
+[environments]
+default = { features = ["cpu"], solve-group = "cpu" }
+gpu = { features = ["gpu"], solve-group = "gpu" }
+
+[tasks]
+test = "pytest tests"

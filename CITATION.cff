@@ -1,0 +1,14 @@
+# Placeholder: the owner fills in authors, DOI and references before the release.
+cff-version: 1.2.0
+message: "If you use CoReNet, please cite it as below."
+title: "CoReNet: Combinatorial Residual Network"
+type: software
+version: 0.1.0
+date-released: "YYYY-MM-DD"            # to be confirmed
+license: MIT
+repository-code: "https://github.com/[owner]/CoReNet"   # to be confirmed
+authors:
+  - family-names: "[to be confirmed]"
+    given-names: "[to be confirmed]"
+# doi: "10.xxxx/zenodo.xxxxxxx"         # to be confirmed
+# preferred-citation:                   # to be confirmed (article describing the architecture)
