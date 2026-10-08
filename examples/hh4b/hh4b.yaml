@@ -1,16 +1,16 @@
 # HH -> 4b: two Higgs bosons, each decaying to a pair of b jets.
-# 1,508 parameters. See examples/hh4b/README.md for the decay-chain definition.
+# See docs/HH4b.md.
 objects:
   jets:  {features: [pt, eta, phi, mass, btag], max: 12}   # INPUTS/Source (alias of "jets") in the H5 file
   b:     jets btag 4                                        # the 4 highest-btag jets
-  other: jets rest 8                                        # up to 8 remaining jets, pT ordered
+  other: jets rest 8                                        # up to 8 remaining jets
 event: [nSelJets, HT]                                       # computed from the jet collection
 
 hypotheses:
   HH:
     H1: [b, b]
     H2: [b, b]
-    context: other           # the H candidates attend to all jets (the 4 b plus the others)
+    context: other           # the Higgs candidates also see the other jets of the event
 
 outputs:
   signal: HH                 # label 1 = signal, label 0 = rest (multijet background)
