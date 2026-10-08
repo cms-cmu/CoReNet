@@ -3,7 +3,7 @@ corenet-train: train CoReNet from a configuration file and an HDF5 file.
 
 The network, the classes and the auxiliary heads all come from ``--config``; the tensors come from
 ``corenet.data.H5Dataset``. Training recipe (defaults; every item can be changed on the command line
-or in the optional ``trainer:`` section of the configuration, see docs/training.md):
+or in the optional ``trainer:`` section of the configuration, see docs/Options.md):
 
   * Adam, learning rate ``lr`` (1e-2), MultiStepLR with ``lr_milestones`` (epochs 15..24) and
     ``lr_gamma`` (0.25): the learning rate is multiplied by 0.25 after each of those epochs;
@@ -22,7 +22,7 @@ selection) scores are not supervised.
 For each held-out fold k this writes, in ``--output-dir``:
     model_fold{k}.pkl          checkpoint: state dict, configuration, classes and metadata
     history_fold{k}.json       per-epoch training loss, and validation loss/AUC on --exclude-folds
-    predictions_fold{k}.h5     predictions on the held-out fold (layout in docs/evaluation.md)
+    predictions_fold{k}.h5     predictions on the held-out fold (layout in docs/Dataset.md)
 """
 
 from __future__ import annotations
@@ -228,7 +228,7 @@ def train_fold(ds: H5Dataset, spec: NetworkSpec, config: dict, fold: int, args, 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="corenet-train", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", required=True, help="network configuration (.yaml or .json)")
-    p.add_argument("--input", required=True, help="HDF5 file with all folds (docs/data_format.md)")
+    p.add_argument("--input", required=True, help="HDF5 file with all folds (docs/Dataset.md)")
     p.add_argument("--output-dir", default="runs/corenet")
     p.add_argument("--fold", type=int, default=-1, help="held-out (test) fold, or -1 for every fold in turn")
     p.add_argument("--exclude-folds", type=int, nargs="*", default=[],
