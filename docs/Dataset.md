@@ -44,9 +44,11 @@ of shape `[NUM_EVENTS, MAX_JETS]`. Every event is stored with the same number of
 slot with `False`. Store all jets of the event, not only the b-jet candidates: which jets are the b
 jets is decided by the event description when the file is loaded, so one file serves any choice.
 
-The feature names are the ones used in the event description. `pt`, `eta`, `phi` and `mass` are the
-kinematics; `btag` is only used to pick the b-jet candidates; any other feature (`isE`, `isM`, ...) is
-an additional input for that object.
+The column names are the ones used in the event description. The columns listed as `features` there
+are the inputs of the network: `pt`, `eta`, `phi` and `mass` are the kinematics, any other feature
+(`isE`, `isM`, ...) is an additional input for that object. A column named in a candidate rule (`btag`
+for `b: jets btag 4`) is read for that choice only and need not be a feature; listing it under `features`
+would make it an input as well.
 
 ## Single objects
 
@@ -88,3 +90,6 @@ description with
 ```bash
 corenet-validate --config examples/bbww/bbww.yaml --input examples/data/bbww_small.h5
 ```
+
+On a machine without a GPU (no CUDA driver), prefix the command with `CONDA_OVERRIDE_CUDA=12.0`; the
+validator only reads the file.
