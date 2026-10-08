@@ -12,9 +12,8 @@ other dependency on any Linux x86-64 machine, and installs the package itself in
 ```bash
 git clone https://github.com/[owner]/CoReNet.git     # URL to be confirmed
 cd CoReNet
-pixi install -e gpu              # CUDA build of PyTorch (any NVIDIA GPU supported by CUDA 12)
-pixi install                     # or: CPU-only build
-pixi shell -e gpu                # activate; or prefix every command with `pixi run -e gpu`
+pixi install                     # CUDA build of PyTorch (any NVIDIA GPU supported by CUDA 12)
+pixi shell                       # activate; or prefix every command with `pixi run`
 ```
 
 pixi itself is a single static binary (`curl -fsSL https://pixi.sh/install.sh | sh`) that needs no root
@@ -43,8 +42,8 @@ requires by construction but have not all been tested.
 
 ## Example
 
-The repository ships two small example files of 20,000 events each, so that everything below runs on a
-laptop CPU. The HH → bb̄bb̄ example, from the repository root:
+The repository ships two small example files of 20,000 events each, so that everything below runs in
+under a minute. The HH → bb̄bb̄ example, from the repository root:
 
 ```bash
 # 1. check the configuration and the data file against each other
@@ -52,7 +51,7 @@ corenet-validate --config examples/hh4b/hh4b.yaml --input examples/data/hh4b_sma
 
 # 2. train with fold 0 held out and fold 1 used for validation (2 epochs for the demo; the default is 20)
 corenet-train --config examples/hh4b/hh4b.yaml --input examples/data/hh4b_small.h5 \
-    --fold 0 --exclude-folds 1 --epochs 2 --device cpu --output-dir runs/hh4b
+    --fold 0 --exclude-folds 1 --epochs 2 --device cuda --output-dir runs/hh4b
 
 # 3. evaluate on the held-out fold
 corenet-evaluate --checkpoint runs/hh4b/model_fold0.pkl --input examples/data/hh4b_small.h5 \
@@ -118,7 +117,7 @@ corenet-train --config examples/bbww/bbww.yaml --input examples/data/bbww_all.h5
 ```
 
 `--fold k` holds out the events of fold `k` for testing (`--fold -1`, the default, trains one model per
-fold in turn); the folds in `--exclude-folds` are kept out of training and used for validation. `--device cuda` falls back to the CPU when no GPU is available. For each fold
+fold in turn); the folds in `--exclude-folds` are kept out of training and used for validation. For each fold
 the output directory receives the checkpoint `model_fold{k}.pkl` (self-contained: the evaluation and
 the export need no configuration file), the training history `history_fold{k}.json` and the
 predictions on the held-out fold `predictions_fold{k}.h5`. Epochs, learning rate, batch size and the
