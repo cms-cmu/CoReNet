@@ -1,35 +1,13 @@
 # CoReNet: Combinatorial Residual Network
 
-CoReNet is a small neural network for event classification in collider physics that is built from a
-description of the **decay chain** of the final state. You declare the reconstructed objects
-(jets, leptons, missing momentum), how they are assigned to roles, and the decay trees of the signal and
-background hypotheses in a YAML file; CoReNet enumerates every admissible assignment of objects to the
-trees, builds a residual network over the resulting candidates bottom-up, selects the most compatible
-candidate of each hypothesis with a learned softmax, and classifies the event. The candidate-selection
-probabilities come out as a by-product.
-
-The networks are deliberately compact: the HH → bb̄bb̄ example has **1,508** parameters and the
-HH → bb̄WW example (with a tt̄ hypothesis) **3,840**.
-
-- [Installation](#installation)
-- [Dependencies](#dependencies)
-- [Quick start](#quick-start)
-- [Walkthrough: HH → 4b from clone to a trained classifier](docs/walkthrough_hh4b.md)
-- [Defining an event decay chain](#defining-an-event-decay-chain)
-- [Validating a configuration and a data file](#validating-a-configuration-and-a-data-file)
-- [Training](#training)
-- [Evaluation](#evaluation)
-- [Model export](#model-export)
-- [Hyperparameters](#hyperparameters)
-- [Example data](#example-data)
-- [Tests](#tests)
-- [Citation and licence](#citation-and-licence)
+A library for training and evaluating CoReNet classifiers on collider events. Originally developed for
+HH → bb̄bb̄, it supports arbitrary final states described by their decay chain.
 
 ## Installation
 
-The repository ships a [pixi](https://pixi.sh) project (`pixi.toml` and the lock file `pixi.lock`), which installs
-the exact same conda-forge builds of Python, PyTorch (with its own CUDA and cuDNN libraries) and every other
-dependency on any Linux x86-64 machine, and installs the package itself in editable mode:
+The repository ships a [pixi](https://pixi.sh) project (`pixi.toml` and the lock file `pixi.lock`), which
+installs the same conda-forge builds of Python, PyTorch (with its own CUDA and cuDNN libraries) and every
+other dependency on any Linux x86-64 machine, and installs the package itself in editable mode:
 
 ```bash
 git clone https://github.com/[owner]/CoReNet.git     # URL to be confirmed
@@ -39,11 +17,12 @@ pixi install                     # or: CPU-only build
 pixi shell -e gpu                # activate; or prefix every command with `pixi run -e gpu`
 ```
 
-pixi itself is a single static binary (`curl -fsSL https://pixi.sh/install.sh | sh`) that needs no root access,
-so the same two commands work on a laptop and on a cluster login node.
+pixi itself is a single static binary (`curl -fsSL https://pixi.sh/install.sh | sh`) that needs no root
+access, so the same commands work on a laptop and on a cluster front end.
 
 This installs the command-line tools `corenet-validate`, `corenet-train`, `corenet-evaluate` and
-`corenet-export` (each has `--help`), and the Python package `corenet`.
+`corenet-export` (each has `--help`), and the Python package `corenet`. The unit tests run with
+`pytest tests`.
 
 ## Dependencies
 
@@ -59,23 +38,23 @@ This installs the command-line tools `corenet-validate`, `corenet-train`, `coren
 | pytest | 7 | tests (optional extra `test`) |
 
 The release was tested with Python 3.13, PyTorch 2.13, NumPy 2.5, h5py 3.16, PyYAML 6.0,
-scikit-learn 1.9, onnx 1.22 and onnxruntime 1.28; the minimum versions above are the ones the code
+scikit-learn 1.9, onnx 1.23 and onnxruntime 1.30; the minimum versions above are the ones the code
 requires by construction but have not all been tested.
 
-## Quick start
+## Example
 
-The repository ships two small example files (20,000 events each) so that everything below runs on a
-laptop CPU in a few minutes. From the repository root:
+The repository ships two small example files of 20,000 events each, so that everything below runs on a
+laptop CPU. The HH → bb̄bb̄ example, from the repository root:
 
 ```bash
 # 1. check the configuration and the data file against each other
 corenet-validate --config examples/hh4b/hh4b.yaml --input examples/data/hh4b_small.h5
 
-# 2. train with fold 0 held out and fold 1 used for validation (2 epochs for the demo; the recipe has 20)
+# 2. train with fold 0 held out and fold 1 used for validation (2 epochs for the demo; the default is 20)
 corenet-train --config examples/hh4b/hh4b.yaml --input examples/data/hh4b_small.h5 \
     --fold 0 --exclude-folds 1 --epochs 2 --device cpu --output-dir runs/hh4b
 
-# 3. evaluate on the held-out fold: AUCs, ROC curve, class and pairing probabilities
+# 3. evaluate on the held-out fold
 corenet-evaluate --checkpoint runs/hh4b/model_fold0.pkl --input examples/data/hh4b_small.h5 \
     --output runs/hh4b/eval_fold0.h5
 
@@ -84,216 +63,135 @@ corenet-export --checkpoint runs/hh4b/model_fold0.pkl --input examples/data/hh4b
     --output-dir runs/hh4b/export
 ```
 
-The same four commands with `bbww` in place of `hh4b` run the HH → bbWW example. The examples are
-described in [examples/hh4b/README.md](examples/hh4b/README.md) and
-[examples/bbww/README.md](examples/bbww/README.md).
-For a step-by-step guide see [docs/walkthrough_hh4b.md](docs/walkthrough_hh4b.md).
+The same four commands with `bbww` in place of `hh4b` run the HH → bb̄WW example.
+[docs/HH4b.md](docs/HH4b.md) walks through the HH → bb̄bb̄ example step by step;
+[docs/BBWW.md](docs/BBWW.md) does the same for HH → bb̄WW against tt̄.
 
-From Python:
-
-```python
-from corenet import CoReNet, load_config
-from corenet.data import H5Dataset
-
-spec = load_config("examples/bbww/bbww.yaml")
-model = CoReNet(spec, device="cpu")
-ds = H5Dataset("examples/data/bbww_small.h5", spec)
-out = model(ds[:512]["inputs"])      # {"logits", "views", "heads", "event"}
-```
-
-## Defining an event decay chain
-
-A configuration has up to nine sections; `objects`, `hypotheses`, `outputs` and `combine` are required.
-The complete reference is [docs/configuration.md](docs/configuration.md); the forward pass is described
-in [docs/architecture.md](docs/architecture.md) and the input file layout in
-[docs/data_format.md](docs/data_format.md).
-
-**Objects and roles.** A *collection* is read from the HDF5 file (`features`, `max` slots); a *role*
-takes a fixed number of members of a collection with a selector: `btag` (highest b tag, then pT),
-`pt`, or `rest` (members not taken by earlier roles). Collections with a single object (a lepton, the
-missing momentum) are used directly.
+The decay chain of the HH → bb̄bb̄ example is
 
 ```yaml
 objects:
-  jets:   {features: [pt, eta, phi, mass, btag], max: 12}
-  b:      jets btag 2
-  q:      jets rest 2
-  lepton: {features: [pt, eta, phi, mass, isE, isM]}
-  met:    {features: [pt, phi]}
-event: [nSelJets, HT]            # event-level scalars, added to every object embedding
-```
+  jets:  {features: [pt, eta, phi, mass, btag], max: 12}   # INPUTS/Source (alias of "jets") in the H5 file
+  b:     jets btag 4                                        # the 4 highest-btag jets
+  other: jets rest 8                                        # up to 8 remaining jets
+event: [nSelJets, HT]                                       # computed from the jet collection
 
-`features` lists every column the loader reads from the file for a collection, not the network inputs:
-`pt`, `eta`, `phi` and `mass` enter the network through the four-vector embedding, while `btag` is a selection
-tag, consumed by the `btag` selector only and never fed to the network. The file does not pre-select the
-candidate jets: it stores all jets of the event (12 slots in the example files, pT-ordered, padding flagged in `MASK`), and
-the roles choose among them when the file is loaded, so one file serves any role definition.
-
-**Hypotheses.** Each hypothesis is a decay tree over roles, single objects and named intermediate
-nodes. Interchangeable children (`[b, b]`, or two structurally identical nodes) and exclusivity (an
-object is used once per candidate) are inferred, and all admissible candidates are enumerated: for
-`HH: {H1: [b, b], H2: [b, b]}` with four b jets, 6 dijets and 3 pairings. A node may be reused by name
-in another hypothesis (one set of weights).
-
-```yaml
 hypotheses:
   HH:
-    H_bb: [b, b]
-    H_WW:
-      W_had: [q, q]
-      W_lep: lepton + met        # recipe: leptonic W with the W-mass constraint on the neutrino pz
-  tt:
-    t_had: [b, W_had]            # W_had and W_lep are the HH nodes, reused
-    t_lep: [b, W_lep]
-```
+    H1: [b, b]
+    H2: [b, b]
+    context: other           # the Higgs candidates also see the other jets of the event
 
-**Recipes.** `A + B` replaces the plain four-vector sum by a registered reconstruction. The one
-registered recipe is `lepton + met`, which also adds the transverse mass and an off-shell score as node
-features.
-
-**Attention edges and context.** `attention: [{query: keys}]` lets the candidates of one node attend to
-those of another, with the pair (log M, ΔR, Δφ) as bias and a mask for candidates sharing an object;
-an edge that leaves one admissible key per query becomes a pairwise merge. `context: <role>` inside a
-hypothesis lets its first-level candidates attend to all objects of the hypothesis plus that role.
-
-```yaml
-attention:
-  - W_lep: W_had
-  - t_had: t_lep                 # a top never pairs with the top that uses the same b jet
-```
-
-**Relations.** `relations: [[A, B], ...]` adds the (log M, ΔR, Δφ) of two single-candidate nodes or
-objects to the input of the main head.
-
-**Outputs, combine and auxiliary heads.** Each output is a class (label 1, 2, ... in file order; 0 is
-"rest") and a head. The first is the main head, a softmax over all classes computed from the selected
-candidates of the `combine` hypotheses (and the relations); every further output also gets its own
-binary auxiliary head on its hypothesis' selected candidate (or, with `~`, on the event pixel).
-
-```yaml
-relations:
-  - [lepton, met]
-  - [H_bb, met]
 outputs:
-  signal: HH                     # main score: P(signal)
-  ttbar:  tt                     # class 2, plus an auxiliary tt head
-combine: [HH, tt]
+  signal: HH                 # label 1 = signal, label 0 = rest (multijet background)
+combine: [HH]
 ```
 
-The two complete examples, [examples/hh4b/hh4b.yaml](examples/hh4b/hh4b.yaml) (one hypothesis,
-three pairings, context attention) and [examples/bbww/bbww.yaml](examples/bbww/bbww.yaml) (two
-hypotheses sharing nodes, a recipe, merges and relations), are explained line by line in their READMEs.
+`jets` is the jet collection, with up to 12 jets per event; the listed `features` are the columns to
+read from the input file. `btag` is only used to pick which jets are treated as b-jet candidates
+(`b: jets btag 4`, the four jets most likely to be b jets); it is not an input to the network. The
+file holds all jets of the event, and the b jets are chosen when it is loaded, so one file serves any
+way of choosing them. [docs/EventInfo.md](docs/EventInfo.md) explains every
+line of such a file and [docs/Dataset.md](docs/Dataset.md) the input file.
 
-## Validating a configuration and a data file
+The full-statistics files (454,261 HH → bb̄bb̄ events, 292,285 HH → bb̄WW events) are distributed
+separately ([DOI / URL to be added]); download them into `examples/data/` as `hh4b_all.h5` and
+`bbww_all.h5`.
 
-Recommended first step before any training:
+## Usage
+
+Three steps: describe the final state ([docs/EventInfo.md](docs/EventInfo.md)), prepare the input
+file ([docs/Dataset.md](docs/Dataset.md)), and choose the settings ([docs/Options.md](docs/Options.md)).
+Then check the two files against each other:
 
 ```bash
-corenet-validate --config my_config.yaml                       # the configuration only
-corenet-validate --config my_config.yaml --input my_data.h5    # and the file against it
+corenet-validate --config my_config.yaml --input my_data.h5
 ```
 
-The configuration is checked with the same parser the trainer uses (required sections, unknown keys,
-types and ranges, every referenced name declared, the `trainer:` recipe), and the network is built and
-summarised (candidates and views per hypothesis, attention vs merge edges, parameter count). With
-`--input`, every dataset the loader will read is looked up with the loader's own rules and its dtype
-and shape are checked (per-collection features and slots, `MASK`, event scalars, labels in range,
-finite weights, folds); then the actual loader reads the file and the network runs a forward pass.
-Each finding is reported as `OK`, `WARN` or `FAIL` with the dataset or key concerned, for example
+checks the event description against the input file; `--json report.json` also writes the report to a file.
 
-```
-  [FAIL] collection `lepton` (used by `lepton`) expects dataset INPUTS/Lepton/isE: not found (INPUTS/Lepton has ['eta', 'mass', 'phi', 'pt'])
-```
-
-and the exit status is 1 if anything failed. `--json report.json` writes the report as JSON.
-
-## Training
+### Training
 
 ```bash
 corenet-train --config examples/bbww/bbww.yaml --input examples/data/bbww_all.h5 \
     --fold 0 --exclude-folds 1 --output-dir runs/bbww --device cuda
 ```
 
-The default recipe: Adam with learning rate 0.01 for 20 epochs; batch size 1024 doubled at epochs 1, 3,
-6 and 10 (with 64, 16, 4, 1, 0 ghost batches); per-class weight normalisation; the input normalisation
-is fixed from the training set before epoch 0; from epoch 15 only the output heads are trained and the
-learning rate is multiplied by 0.25 after each of epochs 15 to 24. Every item can be changed with a
-flag (`--epochs`, `--lr`, `--lr-milestones`, `--lr-gamma`, `--batch-size-init`, `--freeze-epoch`,
-`--no-class-norm`, `--seed`) or in a `trainer:` section of the configuration. `--fold -1` trains one
-model per fold. Details, and the output files (checkpoint, history, predictions on the held-out fold),
-in [docs/training.md](docs/training.md).
+`--fold k` holds out the events of fold `k` for testing (`--fold -1`, the default, trains one model per
+fold in turn); the folds in `--exclude-folds` are kept out of training and used for validation. `--device cuda` falls back to the CPU when no GPU is available. For each fold
+the output directory receives the checkpoint `model_fold{k}.pkl` (self-contained: the evaluation and
+the export need no configuration file), the training history `history_fold{k}.json` and the
+predictions on the held-out fold `predictions_fold{k}.h5`. Epochs, learning rate, batch size and the
+other settings are changed with flags (`--epochs`, `--lr`, ...) or in the configuration file; see
+[docs/Options.md](docs/Options.md) and `corenet-train --help`.
 
-## Evaluation
+### Evaluation
 
 ```bash
 corenet-evaluate --checkpoint runs/bbww/model_fold0.pkl --input examples/data/bbww_all.h5 \
     --output runs/bbww/eval_fold0.h5
 ```
 
-Evaluates the fold held out in training (`--fold k` or `--fold -1` for others), prints the weighted ROC
-AUC of the main output (class 1 against the rest), the one-vs-rest AUC of every class and the AUC of
-every auxiliary head, and writes
+evaluates the fold that was held out in training (`--fold k` for another fold, `--fold -1` for every
+event of the file) and writes the metrics to `eval_fold0.h5.json` and the predictions to `eval_fold0.h5`:
+`class_probabilities` (one column per class, column 1 is the signal score), `views/<hypothesis>` (the
+pairing probabilities, for example the three pairings of the four b jets), `heads/<output>` (the extra
+score of every further output), the ROC curve `roc/{fpr,tpr,threshold}`, and the event labels,
+weights and folds. `--unweighted` ignores the event weights in the metrics.
 
-* `eval_fold0.h5`: `class_probabilities` (N, n_classes), `views/<hypothesis>` (the per-hypothesis
-  candidate probabilities, e.g. the three HH → 4b pairings), `heads/<output>`, the ROC curve
-  `roc/{fpr,tpr,threshold}` and the event labels, weights and folds;
-* `eval_fold0.h5.json`: the metrics.
-
-See [docs/evaluation.md](docs/evaluation.md).
-
-## Model export
+### Exporting
 
 ```bash
 corenet-export --checkpoint runs/bbww/model_fold0.pkl --input examples/data/bbww_small.h5 \
     --output-dir runs/bbww/export
 ```
 
-writes a TorchScript file (`.pt`, `torch.jit.trace`), an ONNX file (`.onnx`, dynamic batch size) and a
-JSON description of the inputs and outputs, then reloads both exported models (with `torch.jit.load`
-and onnxruntime) and checks that they reproduce the PyTorch outputs on events of `--input` to within
-`--atol` (1e-4); TorchScript is bit-identical to PyTorch and ONNX agrees to float32 rounding (≤ 2.3e-5
-on the example models). The exported graph takes the role tensors and
-event scalars as produced by `corenet.data.H5Dataset` (the role selection itself is done by the
-loader, not in the graph) and returns the class probabilities, the per-hypothesis candidate
-probabilities and the auxiliary-head probabilities. Inputs, outputs and limitations:
-[docs/export.md](docs/export.md).
+writes a TorchScript file (`model_fold0.pt`), an ONNX file (`model_fold0.onnx`, dynamic batch size)
+and a JSON description of the inputs and outputs, then reloads both and checks that they reproduce
+the PyTorch outputs on events of `--input` to within `--atol` (1e-4). `--formats torchscript` or
+`--formats onnx` exports only one of the two; `--opset` sets the ONNX opset (17).
 
-## Hyperparameters
+Note that the exported model starts after the jets have been assigned: it takes the jets already
+assigned to the b quarks, the light quarks and so on. An application outside this package has to
+assign the jets the same way (for `b: jets btag 4`, the four jets most likely to be b jets).
 
-The network options live in the `training:` section of the configuration (embedding dimension
-`features`, attention heads, attention gates, key/value projections, phase symmetry, η reflection,
-auxiliary-head loss weights); the training recipe in the `trainer:` section or on the command line.
-[docs/hyperparameters.md](docs/hyperparameters.md) lists every option with its default and
-constraints, and [examples/hh4b/hh4b_hyperparameters.yaml](examples/hh4b/hh4b_hyperparameters.yaml) /
-[examples/bbww/bbww_hyperparameters.yaml](examples/bbww/bbww_hyperparameters.yaml) are commented
-configurations with every option written out at its default value. The network has no dropout.
+#### Inputs
 
-## Example data
+| input | shape | content |
+|---|---|---|
+| one per set of assigned jets, e.g. `b`, `other` | (N, features + 1, n) | the file's features of the `n` jets, in configuration order, plus a presence flag |
+| one per single object, e.g. `lepton`, `met` | (N, features + 1, 1) | the same for a single object |
+| `event` | (N, n_event) | the event quantities (`nSelJets`, `HT`, ...) |
 
-| file | events | size | in the repository |
-|---|---|---|---|
-| `examples/data/hh4b_small.h5` | 20,000 (18,403 multijet, 1,597 HH) | 7.8 MB | yes |
-| `examples/data/bbww_small.h5` | 20,000 (1,198 HH, 18,802 tt̄) | 9.8 MB | yes |
-| `examples/data/hh4b_all.h5` | 454,261 (417,978 multijet, 36,283 HH) | 176 MB | no, distributed separately: [DOI / URL to be added] |
-| `examples/data/bbww_all.h5` | 292,285 (17,511 HH, 274,774 tt̄) | 142 MB | no, distributed separately: [DOI / URL to be added] |
+For HH → bb̄bb̄ the inputs are `b` (N, 6, 4), `other` (N, 6, 8) and `event` (N, 2); for HH → bb̄WW
+`b` (N, 6, 2), `q` (N, 6, 2), `lepton` (N, 7, 1), `met` (N, 3, 1) and `event` (N, 2). The
+exported model takes the same inputs as the training file, without any preprocessing step.
 
-The full files exceed GitHub's 100 MB file limit; download them into `examples/data/` to run the
-full-statistics commands. The small files are stratified random subsamples of the full ones with the
-same schema, written with `python scripts/make_small_h5.py <full> <small> --events 20000`. All files
-carry 5 folds (`EVENT/fold`). Layout: [docs/data_format.md](docs/data_format.md).
+#### Outputs
 
-## Tests
+| output | shape | content |
+|---|---|---|
+| `class_probabilities` | (N, n_classes) | probability of every class, columns `["rest", <outputs>...]` |
+| `views_<hypothesis>` | (N, V) | probability of every pairing of a hypothesis with several pairings |
+| `head_<output>` | (N,) | the extra binary score of every output after the first |
 
-```bash
-pytest tests
+```python
+import onnxruntime as ort
+from corenet import load_config
+from corenet.data import H5Dataset
+
+ds = H5Dataset("examples/data/hh4b_small.h5", load_config("examples/hh4b/hh4b.yaml"))
+sess = ort.InferenceSession("runs/hh4b/export/model_fold0.onnx")
+feeds = {i.name: ds.inputs[i.name][:100].numpy() for i in sess.get_inputs()}
+class_probabilities, views_HH = sess.run(None, feeds)
 ```
 
-The unit tests cover the configuration parser, the candidate enumeration, the network (structure,
-masking, finiteness, gradients), the loader on the example files, training and evaluation on synthetic
-files, export, and the validator. `tests/reference/` holds a parity test against the research code
-this package was extracted from; it is skipped unless `CORENET_REFERENCE_REPO` points to that code.
+## Contributors
 
-## Citation and licence
+[to be added]
 
-Citation information: [CITATION.cff](CITATION.cff) (to be completed). Released under the MIT licence
-([LICENSE](LICENSE)).
+## Citation
+
+If you use this software for a publication, please cite it as given in [CITATION.cff](CITATION.cff)
+(to be completed) and the paper describing the method: [paper reference / arXiv to be added].
+Released under the MIT licence ([LICENSE](LICENSE)).
