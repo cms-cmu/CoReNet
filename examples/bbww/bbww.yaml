@@ -1,5 +1,5 @@
 # HH -> bbWW (semileptonic), with a competing ttbar hypothesis on the same objects.
-# 3,840 parameters. See examples/bbww/README.md for the decay-chain definition.
+# See docs/BBWW.md.
 objects:
   jets:   {features: [pt, eta, phi, mass, btag], max: 12}  # INPUTS/Jets
   b:      jets btag 2                                       # the 2 highest-btag jets
@@ -13,23 +13,23 @@ hypotheses:
     H_bb: [b, b]
     H_WW:
       W_had: [q, q]
-      W_lep: lepton + met    # recipe: neutrino pz from the W-mass constraint
+      W_lep: [lepton, met]   # the leptonic W, from the lepton and the missing momentum
   tt:
-    t_had: [b, W_had]        # W_had and W_lep are the nodes declared under HH, reused by name
+    t_had: [b, W_had]        # W_had and W_lep are the W candidates already defined under HH, reused by name
     t_lep: [b, W_lep]
 
 attention:
   - W_lep: W_had
-  - t_had: t_lep             # a top never pairs with the top that uses the same b jet (mask inferred)
+  - t_had: t_lep             # a top never pairs with the top that uses the same b jet
 
-relations:                   # (log M, dR, dphi) of these pairs feed the main head
+relations:                   # pairs the classifier looks at directly
   - [lepton, met]
   - [H_bb, met]
   - [lepton, W_had]
 
 outputs:
   signal: HH                 # label 1: main score P(signal)
-  ttbar:  tt                 # label 2: also an auxiliary head on the selected tt candidate
+  ttbar:  tt                 # label 2: the ttbar hypothesis also gets a score of its own
 combine: [HH, tt]
 
 training:
