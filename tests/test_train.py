@@ -3,7 +3,7 @@ configurations (HH -> 4b: 2 classes; HH -> bbWW: 3 classes and an auxiliary ttba
 
   1. the training loss is finite and decreases, the history has a validation loss / AUC,
   2. the prediction file has the documented layout, normalised probabilities, the held-out events,
-  3. the freeze leaves exactly the output-head parameters trainable, parameter counts 1,508 / 3,840,
+  3. the freeze leaves exactly the output-head parameters trainable, parameter counts 1,508 / 3,832,
   4. the checkpoint is self-contained and corenet-evaluate reproduces the training-time predictions,
   5. the `trainer:` section of the configuration sets the recipe and the command line overrides it.
 """
@@ -112,7 +112,7 @@ def test_batch_schedule() -> None:
 
 def test_freeze() -> None:
     check_freeze(HH4B, 1508)
-    check_freeze(BBWW, 3840)
+    check_freeze(BBWW, 3832)
 
 
 def test_recipe_from_config() -> None:
@@ -137,4 +137,4 @@ def test_recipe_from_config() -> None:
 def test_train_and_evaluate() -> None:
     with tempfile.TemporaryDirectory(prefix="corenet_train_") as tmp:
         run_one(Path(tmp), "hh4b", HH4B, 1508, ["rest", "signal"])
-        run_one(Path(tmp), "bbww", BBWW, 3840, ["rest", "signal", "ttbar"])
+        run_one(Path(tmp), "bbww", BBWW, 3832, ["rest", "signal", "ttbar"])

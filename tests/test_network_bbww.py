@@ -3,7 +3,7 @@
 
 Random inputs in the loader contract: role tensors (n, len(features) + 1, slots) with the presence flag
 last, event scalars (n, 2). Checks shapes, finiteness (also with padded leaves), the inferred
-constituent-exclusivity mask of `t_had: t_lep`, the relations pixels, the recipe node, statistics
+constituent-exclusivity mask of `t_had: t_lep`, the relations pixels, the lepton + MET node, statistics
 initialisation and a backward pass.
 """
 from __future__ import annotations
@@ -14,7 +14,8 @@ from pathlib import Path
 import torch
 
 from corenet.models.config import ConfigError, load_config, parse_config
-from corenet.models.network import RECIPES, CoReNet
+from corenet.models.fourvectors import addFourVectors
+from corenet.models.network import CoReNet
 
 repo = Path(__file__).resolve().parent.parent
 CFG = repo / "examples" / "bbww" / "bbww.yaml"
@@ -55,9 +56,9 @@ def test_structure():
     # candidates: 2 exclusive tt views, one candidate for every HH node
     assert model.tables["tt"].nodes["tt"].n == 2 and model.tables["tt"].nodes["t_had"].n == 2
     assert all(model.tables["HH"].nodes[x].n == 1 for x in ("H_bb", "W_had", "W_lep", "H_WW", "HH"))
-    # recipe node: registry entry and two extra embedding channels
-    assert spec.nodes["W_lep"].recipe == "lepton+met" and "lepton+met" in RECIPES
-    assert model.node_embed["W_lep"].embed.features == 4 + 2
+    # W_lep is an ordinary two-body composite of two single-object leaves: the same 4 embedding channels as W_had
+    assert spec.nodes["W_lep"].children == ["lepton", "met"]
+    assert model.node_embed["W_lep"].embed.features == 4 == model.node_embed["W_had"].embed.features
     # leaf embedders per role, with their own widths (lepton carries isE/isM, MET nothing extra)
     assert model.leaf_embed["lepton"].embed.features == 6 and model.leaf_embed["met"].embed.features == 4
     assert model.leaf_embed["b"].embed.features == 4 and model.leaf_embed["q"].embed.features == 4
@@ -78,7 +79,7 @@ def test_structure():
             assert bool(same[i, j]) == bool(set(ch) & set(cl)), (ch, cl)
     assert same.sum() == 2 and (~same).sum() == 2
     n_par = sum(p.numel() for p in model.parameters())
-    assert n_par == 3840, n_par
+    assert n_par == 3832, n_par
 
 
 def test_forward_shapes_and_finiteness():
@@ -101,10 +102,12 @@ def test_forward_shapes_and_finiteness():
     assert torch.equal(prep["attention"]["t_had>t_lep"]["mask"][0], model._same("t_had>t_lep")[0])
     assert torch.isfinite(prep["attention"]["t_had>t_lep"]["qv"]).all()
     assert all(v.shape == (n, 3, 1) and torch.isfinite(v).all() for v in prep["relations"].values())
-    # the leptonic W carries the m_W constraint: real solutions sit at m_W
-    W = prep["kin"]["W_lep"]
-    off_shell = prep["hyp"]["HH"]["embed_in"]["W_lep"][:, -1, 0] > 0
-    assert torch.allclose(W[~off_shell, 3, 0], torch.full_like(W[~off_shell, 3, 0], 80.379), atol=0.5)
+    # the leptonic W is the plain four-vector sum of the lepton and the massless MET (eta = m = 0, so pz comes
+    # from the lepton only): no W-mass constraint, no extra features
+    lep, met = prep["leaf_kin"]["lepton"], prep["leaf_kin"]["met"]
+    assert torch.equal(met[:, 1], torch.zeros_like(met[:, 1])) and torch.equal(met[:, 3], torch.zeros_like(met[:, 3]))
+    assert torch.equal(prep["kin"]["W_lep"], addFourVectors(lep, met)[0])
+    assert prep["hyp"]["HH"]["embed_in"]["W_lep"].shape[1] == 4
     # training mode forward + backward; ghost batches of 8 events as the training loop would set them
     # (with the default one-event ghost batches, single-pixel tensors have no variance)
     model.setGhostBatches(n // 8)
@@ -136,7 +139,7 @@ def test_relation_needs_unique_candidates():
     cfg = {
         "objects": {"jets": {"features": ["pt", "eta", "phi", "mass", "btag"], "max": 12}, "b": "jets btag 2", "q": "jets rest 2",
                     "lepton": {"features": ["pt", "eta", "phi", "mass"]}, "met": {"features": ["pt", "phi"]}},
-        "hypotheses": {"HH": {"H_bb": ["b", "b"], "H_WW": {"W_had": ["q", "q"], "W_lep": "lepton + met"}},
+        "hypotheses": {"HH": {"H_bb": ["b", "b"], "H_WW": {"W_had": ["q", "q"], "W_lep": ["lepton", "met"]}},
                        "tt": {"t_had": ["b", "W_had"], "t_lep": ["b", "W_lep"]}},
         "relations": [["t_had", "met"]],
         "outputs": {"signal": "HH", "ttbar": "tt"}, "combine": ["HH", "tt"],

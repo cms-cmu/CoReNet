@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validation rules of corenet.models.config (docs/configuration.md)."""
+"""Validation rules of corenet.models.config (docs/EventInfo.md)."""
 from __future__ import annotations
 
 import copy
@@ -17,7 +17,7 @@ BBWW = {
     "objects": {"jets": {"features": ["pt", "eta", "phi", "mass", "btag"], "max": 12}, "b": "jets btag 2", "q": "jets rest 2",
                 "lepton": {"features": ["pt", "eta", "phi", "mass", "isE", "isM"]}, "met": {"features": ["pt", "phi"]}},
     "event": ["nSelJets", "HT"],
-    "hypotheses": {"HH": {"H_bb": ["b", "b"], "H_WW": {"W_had": ["q", "q"], "W_lep": "lepton + met"}},
+    "hypotheses": {"HH": {"H_bb": ["b", "b"], "H_WW": {"W_had": ["q", "q"], "W_lep": ["lepton", "met"]}},
                    "tt": {"t_had": ["b", "W_had"], "t_lep": ["b", "W_lep"]}},
     "attention": [{"W_lep": "W_had"}, {"t_had": "t_lep"}],
     "relations": [["lepton", "met"], ["H_bb", "met"], ["lepton", "W_had"]],
@@ -46,7 +46,7 @@ def test_hh4b_parses():
 
 def test_bbww_parses():
     s = parse_config(BBWW)
-    assert s.nodes["W_lep"].recipe == "lepton+met" and s.nodes["W_lep"].children == ["lepton", "met"]
+    assert s.nodes["W_lep"].children == ["lepton", "met"]        # two single-object leaves, like any [A, B]
     assert s.nodes["t_had"].children == ["b", "W_had"]           # W_had reused from HH by name
     assert set(s.leaves()) == {"b", "q", "lepton", "met"} and s.leaves()["lepton"].n == 1
     assert [a.query + ">" + a.keys for a in s.attention] == ["W_lep>W_had", "t_had>t_lep"]
@@ -67,7 +67,8 @@ def test_validation_rules():
     c = copy.deepcopy(HH4B); c["outputs"] = {"signal": None}; _fails(c, "main score) needs a hypothesis")
     c = copy.deepcopy(HH4B); c["training"] = {"features": 8, "attention_heads": 3}; _fails(c, "divisible")
     c = copy.deepcopy(HH4B); c["training"] = {"foo": 1}; _fails(c, "unknown keys")
-    c = copy.deepcopy(BBWW); c["hypotheses"]["HH"]["H_WW"]["W_lep"] = "lepton + jets"; _fails(c, "no recipe")
+    c = copy.deepcopy(BBWW); c["hypotheses"]["HH"]["H_WW"]["W_lep"] = "lepton + met"; _fails(c, "the '+' form was removed; write [lepton, met]")
+    c = copy.deepcopy(BBWW); c["hypotheses"]["HH"]["H_WW"]["W_lep"] = "lepton met"; _fails(c, "cannot interpret")
     c = copy.deepcopy(BBWW); c["hypotheses"]["tt"]["W_had"] = ["q", "b"]; _fails(c, "defined twice with different children")
     c = copy.deepcopy(BBWW); c["attention"] = [{"W_lep": "nowhere"}]; _fails(c, "is not a node")
     c = copy.deepcopy(BBWW); c["objects"]["q"] = "jets rest 11"; _fails(c, "slots > max")
@@ -76,18 +77,18 @@ def test_validation_rules():
     c = copy.deepcopy(HH4B); c["trainer"] = {"epochs": 3}; parse_config(c)       # read by corenet-train only
 
 
-def test_relations_and_recipes():
+def test_relations_and_single_object_children():
     s = parse_config(HH4B)
     assert s.relations == []                                                    # optional; absent for 4b
     c = copy.deepcopy(BBWW); c["relations"] = [["lepton", "nothing"]]; _fails(c, "neither a node nor a leaf")
     c = copy.deepcopy(BBWW); c["relations"] = [["met", "met"]]; _fails(c, "two different names")
     c = copy.deepcopy(BBWW); c["relations"] = ["lepton met"]; _fails(c, "pairs '[A, B]'")
-    # recipes are keyed by the children's collections, so a renamed lepton role still resolves
+    # a role taken from a multi-object lepton collection is a leaf like any other: [l, met] parses as [lepton, met]
     c = copy.deepcopy(BBWW)
     c["objects"]["lepton"] = {"features": ["pt", "eta", "phi", "mass", "isE", "isM"], "max": 2}
     c["objects"]["l"] = "lepton pt 1"
-    c["hypotheses"]["HH"]["H_WW"]["W_lep"] = "l + met"
+    c["hypotheses"]["HH"]["H_WW"]["W_lep"] = ["l", "met"]
     c["relations"] = [["l", "met"]]
     s = parse_config(c)
-    assert s.nodes["W_lep"].recipe == "lepton+met" and s.nodes["W_lep"].children == ["l", "met"]
-    c = copy.deepcopy(BBWW); c["hypotheses"]["HH"]["H_WW"]["W_lep"] = "lepton + jets"; _fails(c, "no recipe")
+    assert s.nodes["W_lep"].children == ["l", "met"] and s.leaves()["l"].n == 1 and s.leaves()["met"].n == 1
+    c = copy.deepcopy(BBWW); c["hypotheses"]["HH"]["H_WW"]["W_lep"] = "l + met"; _fails(c, "the '+' form was removed; write [l, met]")

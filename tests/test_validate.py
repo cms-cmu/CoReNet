@@ -34,7 +34,7 @@ def test_valid_synthetic(tmp_path, topology):
     r = validate.validate(cfg, data)
     assert not r.errors, r.errors
     msgs = "\n".join(m for _, _, m in r.items)
-    assert "network built: " + ("1,508" if topology == "hh4b" else "3,840") + " parameters" in msgs
+    assert "network built: " + ("1,508" if topology == "hh4b" else "3,832") + " parameters" in msgs
     assert "loader + forward pass" in msgs
     assert validate.main(["--config", str(cfg), "--input", str(data), "--json", str(tmp_path / "r.json")]) == 0
 
@@ -62,7 +62,7 @@ BROKEN_CONFIGS = [
     (lambda c: c["objects"]["jets"].__setitem__("max", "12"), "max must be an integer"),
     (lambda c: c["objects"].__setitem__("b", "jet btag 2"), "unknown collection 'jet'"),
     (lambda c: c["hypotheses"]["tt"].__setitem__("t_had", ["bb", "W_had"]), "child 'bb' is neither"),
-    (lambda c: c["hypotheses"]["HH"]["H_WW"].__setitem__("W_lep", "lepton + jets"), "no recipe for lepton + jets"),
+    (lambda c: c["hypotheses"]["HH"]["H_WW"].__setitem__("W_lep", "lepton + met"), "the '+' form was removed; write [lepton, met]"),
     (lambda c: c.__setitem__("attention", [{"W_lep": "W_hadronic"}]), "'W_hadronic' is not a node"),
     (lambda c: c.__setitem__("relations", [["lepton", "neutrino"]]), "'neutrino' is neither a node nor a leaf"),
     (lambda c: c.__setitem__("relations", [["t_had", "met"]]), "t_had has 2 candidates"),

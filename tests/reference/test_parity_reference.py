@@ -11,7 +11,7 @@ checkpoints under ``models/`` are used when present). Nothing is written into th
 Checks, for the HH -> 4b and HH -> bbWW example configurations:
   * the example YAML files describe the same network as the reference configurations;
   * with the same seed both code bases initialise identical state dicts (same module creation order);
-    parameter counts 1,508 and 3,840;
+    parameter counts 1,508 and 3,832;
   * the two loaders produce identical input tensors from the same HDF5 file;
   * identical batches give bit-identical (torch.equal) logits, view logits, auxiliary heads and event
     pixels in training mode (ghost batches, twice, so that the running statistics update) and in eval
@@ -57,7 +57,8 @@ TOPOLOGIES = {
     "hh4b": dict(config=repo / "examples/hh4b/hh4b.yaml", ref_config=REF / "configs/hcr/hh4b.yaml",
                  data=REF / "data/h5/hh4b_all.h5", params=1508, ckpt=REF / "models/hh4b_generic_check/model_fold0.pkl"),
     "bbww": dict(config=repo / "examples/bbww/bbww.yaml", ref_config=REF / "configs/hcr/bbww.yaml",
-                 data=REF / "data/h5/bbww_all.h5", params=3840, ckpt=REF / "models/bbww_d8_r2/model_fold0.pkl"),
+                 # models/bbww_d8_r3: trained after W_lep became a plain [lepton, met] sum (models/bbww_d8_r2 predates it)
+                 data=REF / "data/h5/bbww_all.h5", params=3832, ckpt=REF / "models/bbww_d8_r3/model_fold0.pkl"),
 }
 N_EVENTS = 4096
 GHOST_BATCHES = 16
@@ -195,8 +196,8 @@ def test_forward_backward_parity(topology):
 @pytest.mark.parametrize("topology", TOPOLOGIES)
 def test_trained_checkpoint_parity(topology):
     ck_path = TOPOLOGIES[topology]["ckpt"]
-    if not ck_path.exists():
-        pytest.skip(f"{ck_path} not found")
+    if ck_path is None or not ck_path.exists():
+        pytest.skip(f"no trained {topology} checkpoint for this network" if ck_path is None else f"{ck_path} not found")
     ref_ds, new_ds, idx = _data(topology)
     ck = torch.load(ck_path, map_location="cpu", weights_only=False)
     ref, new = _models(topology)

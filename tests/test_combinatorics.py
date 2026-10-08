@@ -36,7 +36,7 @@ def test_bbww_tables():
     roles = {"b": Role("b", 2), "q": Role("q", 2), "lepton": Role("lepton", 1), "met": Role("met", 1)}
     nodes = {
         "H_bb": Node("H_bb", ["b", "b"]), "W_had": Node("W_had", ["q", "q"]),
-        "W_lep": Node("W_lep", ["lepton", "met"], recipe="lepton+met"),
+        "W_lep": Node("W_lep", ["lepton", "met"]),
         "H_WW": Node("H_WW", ["W_had", "W_lep"]), "HH": Node("HH", ["H_bb", "H_WW"]),
         "t_had": Node("t_had", ["b", "W_had"]), "t_lep": Node("t_lep", ["b", "W_lep"]), "tt": Node("tt", ["t_had", "t_lep"]),
     }
