@@ -1,5 +1,5 @@
 """
-CoReNet input tensors from an HDF5 file, driven by a ``NetworkSpec`` (docs/data_format.md).
+CoReNet input tensors from an HDF5 file, driven by a ``NetworkSpec`` (docs/Dataset.md).
 
 One loader serves every topology: it reads the collections named in the configuration from
 ``INPUTS/<Group>``, applies the role selectors and produces exactly the ``inputs`` dict that
