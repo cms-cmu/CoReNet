@@ -99,11 +99,11 @@ checks the event description, the input file, and that the two fit together.
 
 ## Training
 
-A quick test on the small file (CPU, 2 epochs):
+A quick test on the small file (2 epochs):
 
 ```bash
 corenet-train --config examples/hh4b/hh4b.yaml --input examples/data/hh4b_small.h5 \
-    --fold 0 --exclude-folds 1 --epochs 2 --device cpu --output-dir runs/hh4b
+    --fold 0 --exclude-folds 1 --epochs 2 --device cuda --output-dir runs/hh4b
 ```
 
 Full training on the full file, fold 0 held out for testing, fold 1 for validation, on a GPU:
@@ -139,7 +139,7 @@ corenet-evaluate --checkpoint runs/hh4b_full/model_fold0.pkl --input examples/da
 ```
 
 By default the fold held out in training is evaluated (`--fold k` for another fold, `--fold -1` for
-all events), on the CPU (`--device cuda` to use a GPU). The metrics are also
+all events); pass `--device cuda` to evaluate on the GPU. The metrics are also
 written to `eval_fold0.h5.json`. `eval_fold0.h5` contains
 
 | dataset | shape | content |

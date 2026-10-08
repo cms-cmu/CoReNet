@@ -104,12 +104,12 @@ All network settings at their defaults except `reflect_eta: false`.
 
 ## Training, evaluation and export
 
-Quick test on the small file (CPU, 2 epochs):
+Quick test on the small file (2 epochs):
 
 ```bash
 corenet-validate --config examples/bbww/bbww.yaml --input examples/data/bbww_small.h5
 corenet-train --config examples/bbww/bbww.yaml --input examples/data/bbww_small.h5 \
-    --fold 0 --exclude-folds 1 --epochs 2 --device cpu --output-dir runs/bbww
+    --fold 0 --exclude-folds 1 --epochs 2 --device cuda --output-dir runs/bbww
 corenet-evaluate --checkpoint runs/bbww/model_fold0.pkl --input examples/data/bbww_small.h5 \
     --output runs/bbww/eval_fold0.h5
 corenet-export --checkpoint runs/bbww/model_fold0.pkl --input examples/data/bbww_small.h5 \
