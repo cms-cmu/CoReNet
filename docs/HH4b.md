@@ -35,7 +35,7 @@ The decay-chain part of `examples/hh4b/hh4b.yaml`:
 
 ```yaml
 objects:
-  jets:  {features: [pt, eta, phi, mass, btag], max: 12}   # INPUTS/Source (alias of "jets") in the H5 file
+  jets:  {features: [pt, eta, phi, mass], max: 12}         # INPUTS/Source (alias of "jets") in the H5 file
   b:     jets btag 4                                        # the 4 highest-btag jets
   other: jets rest 8                                        # up to 8 remaining jets
 event: [nSelJets, HT]                                       # computed from the jet collection
@@ -61,9 +61,9 @@ training:
 ### `objects`
 
 * `jets`: the jet collection, with up to 12 jets per event, read from `INPUTS/Source`. The listed
-  features are the columns to read from the input file. `btag` is only used to pick which jets are
-  treated as b-jet candidates; it is not an input to the network.
-* `b: jets btag 4`: the four jets most likely to be b jets, taken from the jet collection. When fewer
+  features are the inputs of the network: the four kinematic columns and nothing else.
+* `b: jets btag 4`: the four jets most likely to be b jets, taken from the jet collection. The rule
+  reads `INPUTS/Source/btag` for this choice only; the b tag is not an input of the network. When fewer
   than four jets are tagged, the remaining places go to untagged jets.
 * `other: jets rest 8`: up to eight of the remaining jets. Events with fewer jets are kept.
 * `event: [nSelJets, HT]`: the number of jets and their scalar momentum sum, given to the network as
