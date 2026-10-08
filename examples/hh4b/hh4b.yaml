@@ -1,8 +1,8 @@
 # HH -> 4b: two Higgs bosons, each decaying to a pair of b jets.
 # See docs/HH4b.md.
 objects:
-  jets:  {features: [pt, eta, phi, mass, btag], max: 12}   # INPUTS/Source (alias of "jets") in the H5 file
-  b:     jets btag 4                                        # the 4 highest-btag jets
+  jets:  {features: [pt, eta, phi, mass], max: 12}         # INPUTS/Source (alias of "jets") in the H5 file; features = network inputs
+  b:     jets btag 4                                        # the 4 highest-btag jets (reads INPUTS/Source/btag for the selection only)
   other: jets rest 8                                        # up to 8 remaining jets
 event: [nSelJets, HT]                                       # computed from the jet collection
 
