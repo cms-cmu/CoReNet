@@ -72,8 +72,8 @@ def export_torchscript(wrapper, example, path: Path):
 
 
 def _register_onnx_symbolics(opset: int):
-    """The TorchScript-based ONNX exporter has no mapping for aten::sinh / aten::asinh (used by the
-    ``lepton + met`` recipe) although ONNX has native Sinh / Asinh operators (opset >= 9)."""
+    """The TorchScript-based ONNX exporter has no mapping for aten::sinh / aten::asinh although ONNX has
+    native Sinh / Asinh operators (opset >= 9); registered so that a graph using them still exports."""
     from torch.onnx import register_custom_op_symbolic
 
     register_custom_op_symbolic("aten::sinh", lambda g, x: g.op("Sinh", x), opset)
