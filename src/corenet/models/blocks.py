@@ -101,8 +101,8 @@ class GhostBatchNorm1d(nn.Module):
             x = (x.transpose(1, 2).contiguous()
                  .view(self.nGhostBatches.abs(), self.ghost_batch_size * pixel_groups, self.stride, self.features))
             if mask is None:
-                gbm = x.mean(dim=1, keepdim=True)
-                gbs = (x.var(dim=1, keepdim=True) + self.eps).sqrt()
+                gbm = x.mean(dim=1, keepdim=True)                                  # ghost-batch mean ...
+                gbs = (x.var(dim=1, keepdim=True) + self.eps).sqrt()               # ... and standard deviation
             else:
                 # masked mean and std for each ghost batch
                 mask = mask.view(self.nGhostBatches.abs(), self.ghost_batch_size * pixel_groups, self.stride, 1)
@@ -223,8 +223,8 @@ class MinimalAttention(nn.Module):
         self.device = device
         self.d = dim
         self.phase_symmetric = phase_symmetric
-        self.h = heads
-        self.dh = self.d // self.h
+        self.h = heads                                                            # attention heads
+        self.dh = self.d // self.h                                                # pixel width per head
         self.use_attention_gate = use_attention_gate
         self.use_kv_proj = use_kv_proj
 
@@ -248,7 +248,7 @@ class MinimalAttention(nn.Module):
         self.negativeInfinity = torch.tensor(-1e9, dtype=torch.float).to(device)
 
     def attention(self, q, v, mask, qv=None, k=None):
-        bs, qsl, vsl = q.shape[0], q.shape[3], v.shape[4]
+        bs, qsl, vsl = q.shape[0], q.shape[3], v.shape[4]                        # batch, query pixels, value pixels
         # with key projection: q (bs,h,dh_k,qsl,1), k (bs,h,dh_k,1,vsl), v (bs,h,dh,1,vsl)
         # otherwise:           q (bs,h,dh,qsl,1),                     v (bs,h,dh,1,vsl)
         if k is not None:

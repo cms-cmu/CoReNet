@@ -1,5 +1,5 @@
 """
-Parse and validate a CoReNet configuration (YAML or JSON; grammar in docs/configuration.md) into a
+Parse and validate a CoReNet configuration (YAML or JSON; grammar in docs/EventInfo.md) into a
 ``NetworkSpec``.
 
     spec = load_config("examples/hh4b/hh4b.yaml")     # or parse_config(dict)
@@ -11,7 +11,7 @@ The file grammar::
     event:       [nSelJets, HT]
     hypotheses:  HH: {H1: [b, b], H2: [b, b], context: other}
                  tt: {t_had: [b, W_had], t_lep: [b, W_lep]}               # W_had / W_lep reused by name
-                 ... W_lep: lepton + met                                  # recipe
+                 ... W_lep: [lepton, met]                                 # leaves: roles or max-1 collections
     attention:   [{W_lep: W_had}, {t_had: t_lep}]                        # query: keys (exclusivity mask inferred)
     relations:   [[lepton, met], [H_bb, met]]   # named pairs -> (log M, dR, dPhi) pixels into the main head
     outputs:     {signal: HH, ttbar: tt}        # first = main score; names are the classes (labels 1, 2, ...)
@@ -33,7 +33,6 @@ from .combinatorics import Node, Role
 
 KINEMATIC = ("pt", "eta", "phi", "mass")
 SELECTORS = ("btag", "pt", "rest")
-RECIPES = ("lepton+met",)          # registered reconstructions: sorted *collection* names of the children joined by '+'
 SECTIONS = ("objects", "event", "hypotheses", "attention", "relations", "outputs", "combine", "training", "trainer")
 
 
@@ -205,18 +204,17 @@ def _parse_role(name: str, text: str, collections: dict[str, Collection]) -> Rol
 
 def _parse_tree(name: str, body, nodes: dict[str, Node], leaves: set[str], defined_here: set[str]):
     """Register composite node ``name`` (and its sub-nodes) from ``body``; returns the child names."""
-    if isinstance(body, str):
+    if isinstance(body, str) and "+" in body:
         parts = [p.strip() for p in body.split("+")]
-        if len(parts) < 2 or not all(parts):
-            raise ConfigError(f"{name}: a recipe is written 'A + B', got {body!r}")
-        return _register(name, parts, "+".join(sorted(parts)), nodes, leaves, defined_here)
+        raise ConfigError(f"{name}: the '+' form was removed; write [{', '.join(parts)}] "
+                          f"(a composite is the four-vector sum of its children)")
     if isinstance(body, list):
         if len(body) < 2:
             raise ConfigError(f"{name}: a composite needs at least two children")
         for c in body:
             if not isinstance(c, str):
                 raise ConfigError(f"{name}: children must be names; nest a mapping to define sub-nodes")
-        return _register(name, list(body), None, nodes, leaves, defined_here)
+        return _register(name, list(body), nodes, leaves, defined_here)
     if isinstance(body, dict):
         children = []
         for cname, cbody in body.items():
@@ -226,16 +224,16 @@ def _parse_tree(name: str, body, nodes: dict[str, Node], leaves: set[str], defin
             children.append(cname)
         if len(children) < 2:
             raise ConfigError(f"{name}: a composite needs at least two children")
-        return _register(name, children, None, nodes, leaves, defined_here)
+        return _register(name, children, nodes, leaves, defined_here)
     raise ConfigError(f"{name}: cannot interpret {body!r}")
 
 
-def _register(name, children, recipe, nodes, leaves, defined_here):
-    node = Node(name, list(children), recipe)
+def _register(name, children, nodes, leaves, defined_here):
+    node = Node(name, list(children))
     if name in leaves:
         raise ConfigError(f"{name}: a node cannot have the same name as a role or collection")
     if name in nodes:
-        if nodes[name].children != node.children or nodes[name].recipe != node.recipe:
+        if nodes[name].children != node.children:
             raise ConfigError(f"{name}: defined twice with different children")
         return children
     nodes[name] = node
@@ -295,17 +293,8 @@ def parse_config(cfg: dict) -> NetworkSpec:
         for n in defined_here:                       # first declaration wins; a reuse by name is not a declaration
             owner.setdefault(n, hname)
         hypotheses[hname] = HypothesisSpec(hname, context)
-    # every referenced name must be a leaf or a node; a recipe must be registered for its children's collections
+    # every referenced name must be a leaf or a node
     for node in nodes.values():
-        if node.recipe:
-            # the registry is keyed by the children's collections, so `l: leptons pt 1` works like `lepton`
-            key = "+".join(sorted(roles[c].collection if c in roles else c for c in node.children))
-            if key not in RECIPES:
-                raise ConfigError(f"{node.name}: no recipe for {' + '.join(node.children)} "
-                                  f"(collections {key}; known: {', '.join(RECIPES)})")
-            if any(c not in leaves for c in node.children):
-                raise ConfigError(f"{node.name}: recipe children must be leaves")
-            node.recipe = key
         for c in node.children:
             if c not in leaves and c not in nodes:
                 raise ConfigError(f"{node.name}: child {c!r} is neither a role, a max-1 collection nor a node")
@@ -396,4 +385,4 @@ def load_config(path: str | Path) -> NetworkSpec:
 
 
 __all__ = ["ConfigError", "Collection", "RoleSpec", "HypothesisSpec", "AttentionSpec", "RelationSpec", "OutputSpec",
-           "TrainingSpec", "NetworkSpec", "parse_config", "read_config_dict", "load_config", "RECIPES", "SECTIONS"]
+           "TrainingSpec", "NetworkSpec", "parse_config", "read_config_dict", "load_config", "SECTIONS"]

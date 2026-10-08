@@ -40,11 +40,9 @@ class Role:
 
 @dataclass
 class Node:
-    """A composite: ``children`` are role names or node names; ``recipe`` names a reconstruction
-    (e.g. ``W_lep: lepton + met``) instead of a plain four-vector sum."""
+    """A composite: ``children`` are role names or node names; its four-vector is their sum."""
     name: str
     children: list[str]
-    recipe: str | None = None
 
 
 # a candidate's assignment: tuple of (role, slot) pairs, sorted
@@ -56,7 +54,7 @@ def _signature(name: str, nodes: dict[str, Node], roles: dict[str, Role]) -> tup
     if name in roles:
         return ("role", name)
     node = nodes[name]
-    return ("node", node.recipe or "", tuple(sorted(_signature(c, nodes, roles) for c in node.children)))
+    return ("node", tuple(sorted(_signature(c, nodes, roles) for c in node.children)))
 
 
 @dataclass
@@ -164,6 +162,7 @@ def build_hypothesis_table(top: str, nodes: dict[str, Node], roles: dict[str, Ro
         sigs = [_signature(c, nodes, roles) for c in node.children]
         sym = len(node.children) >= 2 and all(s == sigs[0] for s in sigs)
         children = [canon(c) for c in node.children]
+        # child_index: row p = candidate p of this node, column j = the index of its j-th child's candidate in that child's table
         idx = torch.tensor(
             [[ordered[c].index(sub) for c, sub in zip(children, entry[1])] for entry in entries], dtype=torch.long
         )
@@ -195,7 +194,7 @@ class ReinforceLayer(nn.Module):
         if idx.dim() == 1:
             idx = idx.view(-1, 1)
         self.register_buffer("child_index", idx, persistent=False)  # not a weight: keep out of the state_dict
-        self.k = int(idx.shape[1])
+        self.k = int(idx.shape[1])                                   # children (decay products) per parent candidate
         self.symmetric_pair = symmetric_pair
         if symmetric_pair:
             assert self.k == 2, "symmetric_pair needs exactly two children"
@@ -210,7 +209,7 @@ class ReinforceLayer(nn.Module):
                                      device=device)
 
     def forward(self, x, xx):
-        bs, d, P = xx.shape
+        bs, d, P = xx.shape                                           # batch, pixel width, number of parent candidates
         if self.k == 0:
             return self.conv(xx)
         gathered = x[:, :, self.child_index.reshape(-1)].view(bs, d, P, self.k)  # (bs, d, P, k)
@@ -250,6 +249,7 @@ class ResNetBlock(nn.Module):
             c.setGhostBatches(nGhostBatches)
 
     def forward(self, x, xx, x0, xx0):
+        # x: child pixels, xx: parent pixels (one per candidate); x0 / xx0: their residual (pre-activation) copies
         for i, conv in enumerate(self.conv):
             xx = self.reinforce[i](x, xx)
             x = conv(x)

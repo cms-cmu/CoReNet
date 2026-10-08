@@ -9,8 +9,6 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-W_MASS = 80.379  # GeV, used by the ``lepton + met`` recipe
-
 
 def asinh(x):
     """Numerically stable asinh (written out so that it exports to every backend)."""
@@ -77,65 +75,4 @@ def NonLU(x):
     return x * torch.sigmoid(x)
 
 
-# ----------------------------------------------------------------------------- leptonic W
-def neutrino_pz(l_pt, l_eta, l_phi, l_mass, nu_px, nu_py, mW=W_MASS):
-    """Solve the W-mass constraint for the neutrino pz.
-
-    Returns ``(pz1, pz2, is_complex, off_shell_score)``. When the discriminant is negative both
-    solutions are the real part and ``off_shell_score`` is the magnitude of the imaginary part
-    (0 otherwise).
-    """
-    l_px = l_pt * torch.cos(l_phi)
-    l_py = l_pt * torch.sin(l_phi)
-    l_pz = l_pt * torch.sinh(l_eta)
-    l_E = torch.sqrt(l_px**2 + l_py**2 + l_pz**2 + l_mass**2)
-
-    met_pt_sq = nu_px**2 + nu_py**2
-    A = (l_px * nu_px + l_py * nu_py) + (mW**2 - l_E**2 + l_px**2 + l_py**2 + l_pz**2) / 2
-    C = l_E**2 - l_pz**2
-    disc = (2 * A * l_pz) ** 2 - 4 * (l_E**2 * met_pt_sq - A**2) * C
-
-    is_complex = disc < 0
-    real_part = (2 * A * l_pz) / (2 * C + 1e-8)
-    delta = torch.sqrt(torch.abs(disc) + 1e-8) / (2 * C + 1e-8)
-    pz1 = torch.where(is_complex, real_part, real_part + delta)
-    pz2 = torch.where(is_complex, real_part, real_part - delta)
-    off_shell_score = torch.where(is_complex, delta, torch.zeros_like(delta))
-    return pz1, pz2, is_complex, off_shell_score
-
-
-def leptonic_w(l, nu, mW=W_MASS):
-    """Two leptonic-W candidates from a lepton ``l`` (N, 4, P) in (pt, eta, phi, m) and the missing
-    transverse momentum ``nu`` (N, 2, P) in (pt, phi).
-
-    Returns ``(W1, W2, off_shell_score, pz1, pz2)`` with W1/W2 in (pt, eta, phi, m).
-    """
-    l_pt, l_eta, l_phi, l_mass = l[:, 0:1], l[:, 1:2], l[:, 2:3], l[:, 3:4]
-    met_pt, met_phi = nu[:, 0:1], nu[:, 1:2]
-    nu_px = met_pt * torch.cos(met_phi)
-    nu_py = met_pt * torch.sin(met_phi)
-
-    pz1, pz2, _, off_shell_score = neutrino_pz(l_pt, l_eta, l_phi, l_mass, nu_px, nu_py, mW=mW)
-
-    l_px = l_pt * torch.cos(l_phi)
-    l_py = l_pt * torch.sin(l_phi)
-    l_pz = l_pt * torch.sinh(l_eta)
-    l_energy = torch.sqrt(l_px**2 + l_py**2 + l_pz**2 + l_mass**2)
-
-    def make_w(nu_pz):
-        nu_energy = torch.sqrt(met_pt**2 + nu_pz**2)
-        w_px = l_px + nu_px
-        w_py = l_py + nu_py
-        w_pz = l_pz + nu_pz
-        w_energy = l_energy + nu_energy
-        w_pt = torch.sqrt(w_px**2 + w_py**2)
-        w_phi = torch.atan2(w_py, w_px)
-        w_eta = torch.asinh(w_pz / (w_pt + 1e-8))
-        w_mass_sq = w_energy**2 - w_px**2 - w_py**2 - w_pz**2
-        w_mass = torch.sqrt(torch.clamp(w_mass_sq, min=0))
-        return torch.cat([w_pt, w_eta, w_phi, w_mass], dim=1)
-
-    return make_w(pz1), make_w(pz2), off_shell_score, pz1, pz2
-
-
-__all__ = ["PxPyPzE", "PtEtaPhiM", "addFourVectors", "diObjectMass", "NonLU", "neutrino_pz", "leptonic_w", "W_MASS"]
+__all__ = ["PxPyPzE", "PtEtaPhiM", "addFourVectors", "diObjectMass", "NonLU"]

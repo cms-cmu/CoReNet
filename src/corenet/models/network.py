@@ -1,15 +1,15 @@
 """
-CoReNet: the Combinatorial Residual Network, built from a ``NetworkSpec`` (docs/configuration.md).
+CoReNet: the Combinatorial Residual Network, built from a ``NetworkSpec`` (docs/EventInfo.md).
 
-Structure of one forward pass (docs/architecture.md):
+Structure of one forward pass:
 
     inputs  role tensors (n, len(features) + 1, slots) in the collection's feature order, plus a
             presence flag (+1 present / -1 padded) as the last channel; event scalars (n, dA)
-    1. kinematics    node 4-vectors bottom-up from the candidate tables (four-vector sum, or a
-                     recipe such as ``lepton + met``)
+    1. kinematics    node 4-vectors bottom-up from the candidate tables (four-vector sum over the
+                     children; a massless MET leaf enters with eta = m = 0)
     2. features      log(1+pt), eta, dphi-to-parent, log(1+m) for every child slot; the top node
-                     drops phi; recipe nodes add their extra quantities; event scalars whose name
-                     contains ``nSelJets`` enter as log(nSelJets - 3)
+                     drops phi; event scalars whose name contains ``nSelJets`` enter as
+                     log(nSelJets - 3)
     3. embedding     GBN embed (+ event scalars for leaves) -> conv, per role / node
     4. reinforce     bottom-up ResNetBlock per composite node (a node reused by several
                      hypotheses is computed once); ``context`` attention after the first level;
@@ -32,7 +32,7 @@ import torch.nn.functional as F
 
 from .blocks import GhostBatchNorm1d, MinimalAttention, linear
 from .combinatorics import ResNetBlock, build_hypothesis_table
-from .fourvectors import NonLU, PxPyPzE, addFourVectors, diObjectMass, leptonic_w
+from .fourvectors import NonLU, PxPyPzE, addFourVectors, diObjectMass
 from .config import KINEMATIC, ConfigError, NetworkSpec
 
 TAG_FEATURES = ("btag",)  # selection tags: used by the role selectors, never fed to the network
@@ -77,21 +77,6 @@ def finite(x, fill=-1.0):
     return torch.where(torch.isfinite(x), x, torch.full_like(x, fill))
 
 
-# ------------------------------------------------------------------------------- recipes
-def recipe_lepton_met(lep, met):
-    """W_lep from a lepton (n,4,P) and MET (n,4,P; eta = m = 0) with the m_W constraint on the neutrino
-    pz, taking the smaller-|pz| solution. Returns the W 4-vector (n,4,P) and the extra node features
-    (n,2,P): log(1 + m_T(l, MET)), log(1 + off-shell score)."""
-    W1, W2, off_shell, pz1, pz2 = leptonic_w(lep, met[:, (0, 2)])
-    v = torch.where(pz1.abs() <= pz2.abs(), W1, W2)
-    dphi = calcDeltaPhi(lep, met)
-    mT = torch.sqrt(torch.clamp(2 * lep[:, 0:1] * met[:, 0:1] * (1 - torch.cos(dphi)), min=0))
-    return v, torch.cat([torch.log(1 + mT), torch.log(1 + off_shell)], dim=1)
-
-
-RECIPES = {"lepton+met": (recipe_lepton_met, 2)}   # key: sorted collection names -> (function, n_extra)
-
-
 class _Embed(nn.Module):
     """GBN embedding (in -> d) followed by a GBN convolution (d -> d)."""
 
@@ -131,6 +116,18 @@ class _Context(nn.Module):
 
 
 # ------------------------------------------------------------------------------- the network
+# Symbols used below, in physics terms:
+#   n, d        events in the batch; width of every pixel (``training.features``)
+#   h, T        a hypothesis (named by its top node, e.g. HH) and its HypothesisTable: for every node of the decay
+#               tree, the ordered candidates (which jets / objects are assigned to its decay products)
+#   nt          the table of one node: nt.children (its decay products), nt.n candidates, nt.child_index (P, k)
+#               = for each candidate the index of the candidate of each child in that child's table
+#   P           the candidate axis of a tensor (n, features, P): one pixel per candidate of a node (for HH -> 4b:
+#               6 dijets, 3 pairings; 1 for a node with a unique assignment). V = candidates of a top node = views
+#   k           the number of children (decay products) of a node, or (in ``attention``) the keys node of an edge
+#   kin, kinP   candidate four-vectors as (pt, eta, phi, m) and as (px, py, pz, E); present = all constituents are
+#               present in the event (a candidate built on a padded slot is absent)
+#   x, xx       child pixels and parent pixels of a reinforce block; x0, xx0 their residual (pre-activation) copies
 class CoReNet(nn.Module):
     """The network of a ``NetworkSpec``. ``forward(inputs)`` takes the dict produced by the loader
     (one tensor per leaf plus ``"event"``) and returns ``{"logits": (n, nClasses), "views": {hypothesis:
@@ -174,9 +171,9 @@ class CoReNet(nn.Module):
             for node in self.levels[h]:
                 if node in self.node_embed:
                     continue
-                nt = T.nodes[node]
-                k = len(nt.children)
-                n_in = (3 if node in self.tops else 4) + self._n_recipe_extras(node)
+                nt = T.nodes[node]                                    # candidate table of this node
+                k = len(nt.children)                                  # decay products per candidate
+                n_in = 3 if node in self.tops else 4                  # node features: log pt, eta, log m (+ dphi to its parent)
                 self.node_embed[node] = _Embed(n_in, self.d, ps, node, device)
                 children_composite = all(c not in self.leaves for c in nt.children)
                 groups = [[p * k + j for j in range(k)] for p in range(nt.n)]        # per-slot child pixels
@@ -196,7 +193,7 @@ class CoReNet(nn.Module):
         self.attention_nodes: dict[str, tuple[str, str]] = {}
         self.merge_nodes: dict[str, tuple[str, str]] = {}
         for a in spec.attention:
-            q, k = self.canonical[a.query], self.canonical[a.keys]
+            q, k = self.canonical[a.query], self.canonical[a.keys]  # query node and keys node of the edge
             key = f"{a.query}>{a.keys}"
             cq, ck = self._candidates(q), self._candidates(k)
             if q == k:      # self-attention: the views of one node share members by construction -> mask the diagonal only
@@ -273,15 +270,6 @@ class CoReNet(nn.Module):
         feats = self.spec.collection_of(role).features
         return [feats.index(k) if k in feats else None for k in KINEMATIC]
 
-    def _recipe(self, node):
-        """(function, n_extra) of a recipe node, else None."""
-        r = self.spec.nodes[node].recipe
-        return RECIPES[r] if r else None
-
-    def _n_recipe_extras(self, node):
-        rec = self._recipe(node)
-        return rec[1] if rec else 0
-
     def _table_of(self, name):
         """(hypothesis, NodeTable) of a canonical node, from the first hypothesis that contains it."""
         for h, T in self.tables.items():
@@ -308,6 +296,8 @@ class CoReNet(nn.Module):
     def _prepare(self, inputs):
         """Kinematics, features and masks for every hypothesis. Returns a dict of intermediate tensors."""
         n = next(iter(inputs.values())).shape[0]
+        # per leaf (role or single object): four-vectors (n, 4, slots), its non-kinematic features (isE / isM; btag
+        # is never used), and which slots hold a real object
         leaf_kin, leaf_extra, leaf_present, etaSign = {}, {}, {}, None
         for r in self.leaf_order:
             if r not in inputs:
@@ -340,9 +330,9 @@ class CoReNet(nn.Module):
 
         out = {"n": n, "leaf_kin": leaf_kin, "leaf_extra": leaf_extra, "leaf_present": leaf_present, "event": a, "hyp": {}}
         # node kinematics are shared across hypotheses (a reused node is one node)
-        kin, kinP, present, extras = {}, {}, {}, {}
+        kin, kinP, present = {}, {}, {}
         for h, T in self.tables.items():
-            out["hyp"][h] = self._prepare_hypothesis(h, T, leaf_kin, leaf_extra, leaf_present, kin, kinP, present, extras)
+            out["hyp"][h] = self._prepare_hypothesis(h, T, leaf_kin, leaf_extra, leaf_present, kin, kinP, present)
         out["kin"], out["kinP"], out["present"] = kin, kinP, present
         # a node reused by several hypotheses is embedded once; its dphi reference is the parent in the
         # hypothesis that DECLARES it, independent of the order of the hypotheses in the file
@@ -378,9 +368,8 @@ class CoReNet(nn.Module):
             out["relations"][key] = finite(matrixMdRdPhi(va, vb, vaP, vbP)).view(n, 3, 1)
         return out
 
-    def _prepare_hypothesis(self, h, T, leaf_kin, leaf_extra, leaf_present, kin, kinP, present, extras):
-        # kin / kinP / present / extras are shared across hypotheses: a reused node is computed once
-        # (extras = recipe nodes' extra features (n, n_extra, P))
+    def _prepare_hypothesis(self, h, T, leaf_kin, leaf_extra, leaf_present, kin, kinP, present):
+        # kin / kinP / present are shared across hypotheses: a reused node is computed once
         for node in self.levels[h]:
             if node in kin:
                 continue
@@ -395,14 +384,9 @@ class CoReNet(nn.Module):
                     vecs.append(kin[c][:, :, idx]); vecsP.append(kinP[c][:, :, idx])
                     p = present[c][:, idx]
                 pres = p if pres is None else (pres & p)
-            rec = self._recipe(node)
-            if rec:
-                v, extras[node] = rec[0](*vecs)
-                vP = PxPyPzE(v)
-            else:
-                v, vP = addFourVectors(vecs[0], vecs[1], v1PxPyPzE=vecsP[0], v2PxPyPzE=vecsP[1])
-                for extra_v, extra_P in zip(vecs[2:], vecsP[2:]):
-                    v, vP = addFourVectors(v, extra_v, v1PxPyPzE=vP, v2PxPyPzE=extra_P)
+            v, vP = addFourVectors(vecs[0], vecs[1], v1PxPyPzE=vecsP[0], v2PxPyPzE=vecsP[1])
+            for extra_v, extra_P in zip(vecs[2:], vecsP[2:]):
+                v, vP = addFourVectors(v, extra_v, v1PxPyPzE=vP, v2PxPyPzE=extra_P)
             kin[node], kinP[node], present[node] = v, vP, pres
 
         # log features
@@ -453,8 +437,6 @@ class CoReNet(nn.Module):
                             dphi[:, :, idx] = calcDeltaPhi(nf[pnode], f[:, :, idx])
                 if dphi is not None:
                     f = torch.cat([f[:, 0:2], dphi, f[:, 3:4]], dim=1)
-            if node in extras:
-                f = torch.cat([f, extras[node]], dim=1)
             embed_in[node] = finite(f)
         first = self.levels[h][0]
         prep = {"slot_feats": slot_feats, "slot_present": slot_present, "embed_in": embed_in, "first": first}
@@ -465,7 +447,9 @@ class CoReNet(nn.Module):
 
     def _prepare_context(self, h, T, crole, leaf_kin, leaf_present, kin, kinP):
         """Objects = this hypothesis' leaves (jet roles, lepton, MET; flag 2) + the context role (its own flag); pair
-        matrices object-object (flag 0) and first-level-candidate-object (flag 1), with masks."""
+        matrices object-object (flag 0) and first-level-candidate-object (flag 1), with masks.
+        ``crole`` is the context role (e.g. ``other``: the jets not assigned to any decay product); ``o`` (n, 5, S) the
+        S objects the candidates may look at; ``d`` (n, 4, P) the P candidates of the first-level node."""
         first = self.levels[h][0]
         # every leaf of the hypothesis (jet roles and single-object collections such as lepton / MET), flag 2
         leaf_roles = [c for c in self.leaf_order if c != crole and any(c in T.nodes[n].children for n in self.levels[h])]
@@ -586,7 +570,9 @@ class CoReNet(nn.Module):
         """Fixed pairwise merge for an edge with <= 1 admissible key per query: every query candidate i is
         updated from its partner j = partner[i] and the pair features (i, j) through a 3d -> d convolution,
         with the same residual convention as MinimalAttention (q0 += delta, q = NonLU(q0)). Queries without an
-        admissible (present) partner are left unchanged."""
+        admissible (present) partner are left unchanged.
+        ``q`` / ``q0`` (n, d, Pq): pixels of the query node's candidates and their residual copies; ``kpix`` (n, d, Pk):
+        pixels of the keys node; ``qv`` (n, d, Pq, Pk): embedded pair features (log M, dR, dphi); ``mask`` (n, Pq, Pk)."""
         n = q.shape[0]
         partner = self._partner(key)                                              # (Pq,) long, -1 = none
         has = partner >= 0
@@ -601,6 +587,7 @@ class CoReNet(nn.Module):
         return NonLU(q0), q0
 
     def _apply_context(self, h, ctx, a, d, d0):
+        # a: embedded event scalars (n, d, 1); d / d0: pixels of the first-level candidates and their residual copies
         C = self.context[h]
         S, P = ctx["S"], ctx["P"]
         o = C.embed(ctx["feats"], ctx["mask"], add=a)
@@ -676,4 +663,4 @@ class CoReNet(nn.Module):
                 m.setGhostBatches(nGhostBatches)
 
 
-__all__ = ["CoReNet", "RECIPES", "calcDeltaPhi", "matrixMdPhi", "matrixMdRdPhi", "log_kinematics"]
+__all__ = ["CoReNet", "calcDeltaPhi", "matrixMdPhi", "matrixMdRdPhi", "log_kinematics"]
