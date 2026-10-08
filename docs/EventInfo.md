@@ -28,17 +28,19 @@ members are the candidate jets of the decay chain.
 
 ```yaml
 objects:
-  jets:   {features: [pt, eta, phi, mass, btag], max: 12}
+  jets:   {features: [pt, eta, phi, mass], max: 12}
   b:      jets btag 4
   other:  jets rest 8
   lepton: {features: [pt, eta, phi, mass, isE, isM]}
   met:    {features: [pt, phi]}
 ```
 
-* `jets`: the jet collection, with up to 12 jets per event. The listed features are the columns to
-  read from the input file ([Dataset.md](./Dataset.md)). `btag` is only used to pick which jets are
-  treated as b-jet candidates; it is not an input to the network.
-* `b: jets btag 4`: the four jets most likely to be b jets, taken from the jet collection.
+* `jets`: the jet collection, with up to 12 jets per event. The listed features are the inputs of the
+  network: exactly these columns of the input file ([Dataset.md](./Dataset.md)) are fed to it, `pt`,
+  `eta`, `phi` and `mass` as the kinematics and any other feature as an additional input.
+* `b: jets btag 4`: the four jets most likely to be b jets, taken from the jet collection. The `btag`
+  rule reads the `btag` column of the file for this choice only; it need not be a feature. (Listing
+  `btag` under `features` would make it one more input of the network.)
 * `other: jets rest 8`: up to eight of the remaining jets.
 * `lepton`: a single object per event (no `max`), with two extra inputs `isE` and `isM`.
 * `met`: the missing transverse momentum, a single object given by `pt` and `phi`.
@@ -49,9 +51,11 @@ through candidate lines of the form `<name>: <collection> <rule> <n>`:
 
 | rule | the `n` jets taken |
 |---|---|
-| `btag` | the `n` jets most likely to be b jets (needs a `btag` feature) |
-| `pt` | the `n` leading jets |
+| `btag` | the `n` jets most likely to be b jets; reads the `btag` (and `pt`) column of the file, which need not be a feature |
+| `pt` | the `n` leading jets; reads the `pt` column |
 | `rest` | up to `n` of the jets not taken by an earlier line |
+
+A rule reads its column from the input file for the selection only; the network sees the `features`.
 
 Lines are filled in order and a jet is used by at most one line. An event with fewer jets than needed
 is kept; the missing ones are simply absent.
