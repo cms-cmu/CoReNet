@@ -4,7 +4,7 @@ corenet-validate: check a configuration, and optionally an HDF5 file against it,
     corenet-validate --config examples/hh4b/hh4b.yaml --input examples/data/hh4b_small.h5
 
 1. Configuration: parsed with the same code as corenet-train (``parse_config``: required sections,
-   unknown keys, types and ranges, every role / node / recipe / attention edge / relation / output /
+   unknown keys, types and ranges, every role / node / attention edge / relation / output /
    combine entry refers to a declared name; the ``trainer:`` recipe section), then the network is
    built (candidate enumeration, relation restrictions) and summarised.
 2. Data (with ``--input``): every dataset the loader reads is looked up with the loader's own rules
