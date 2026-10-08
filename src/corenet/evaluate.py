@@ -5,7 +5,7 @@ corenet-evaluate: apply a trained CoReNet to an HDF5 file and compute its perfor
         --output runs/hh4b/eval_fold0.h5
 
 Events: by default the fold held out when the checkpoint was trained (``--fold -1`` = every event of
-the file). The output file (layout in docs/evaluation.md) holds the class probabilities, the view
+the file). The output file (layout in docs/Dataset.md) holds the class probabilities, the view
 (candidate) probabilities of every multi-candidate hypothesis, the auxiliary head probabilities,
 the event labels / weights and, for the main output, the ROC curve; the AUCs are printed and
 written as JSON next to it (``<output>.json``).
@@ -80,7 +80,7 @@ def predict(model: CoReNet, data: Batches, idx: np.ndarray, batch_size: int = 16
 
 def write_predictions(path, ds: H5Dataset, idx: np.ndarray, probs, views, heads, spec: NetworkSpec,
                       attrs: dict | None = None, roc: dict | None = None) -> Path:
-    """Prediction file; layout documented in docs/evaluation.md."""
+    """Prediction file; layout documented in docs/Dataset.md."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "w") as f:
