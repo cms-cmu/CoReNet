@@ -14,6 +14,11 @@ plus ``labels`` (``EVENT/label``, or ``CLASSIFICATIONS/EVENT/signal`` when absen
 (``EVENT/weight``), ``folds`` (``EVENT/fold``) and ``events`` (``EVENT/event``). No generator-level
 information is read: the roles are chosen from reconstructed quantities only.
 
+A collection's ``features`` are exactly the channels of its tensors. A selector reads the column it
+needs (``btag``: the ``btag`` and ``pt`` columns) from the file on its own, whether or not it is a
+feature; such a column is used for the selection only (``columns_to_read``). A column listed under
+``features`` is always a network input, ``btag`` included.
+
     ds = H5Dataset("examples/data/bbww_small.h5", load_config("examples/bbww/bbww.yaml"))
     out = model(ds.inputs)
 
@@ -71,6 +76,11 @@ def used_collections(spec: NetworkSpec) -> list[Collection]:
     ]
 
 
+def columns_to_read(spec: NetworkSpec, coll: Collection) -> list[str]:
+    """Datasets read from a collection's group: its features, then the selector columns that are not features."""
+    return spec.columns_to_read(coll.name)
+
+
 def event_source(spec: NetworkSpec, name: str) -> tuple[str, str]:
     """Where an event scalar comes from: ("computed", collection) for nSelJets / HT when a read
     collection has max > 1 (the first one), else ("dataset", "EVENT/<name>")."""
@@ -92,20 +102,16 @@ def resolve_group(f: h5py.File, name: str) -> str:
     )
 
 
-def _read_collection(
-    f: h5py.File, coll: Collection
-) -> tuple[dict[str, np.ndarray], np.ndarray]:
-    """(features, present) of one collection, both shaped (N, slots in the file)."""
+def _read_collection(f: h5py.File, coll: Collection, columns: list[str]) -> tuple[dict[str, np.ndarray], np.ndarray]:
+    """(columns, present) of one collection, both shaped (N, slots in the file); ``columns`` are the
+    features plus the selector columns (``columns_to_read``)."""
     group = f["INPUTS"][resolve_group(f, coll.name)]
-    missing = [k for k in coll.features if k not in group]
+    missing = [k for k in columns if k not in group]
     if missing:
-        raise KeyError(
-            f"collection {coll.name!r} (INPUTS/{group.name.split('/')[-1]}): missing features {missing}"
-        )
-    feats = {
-        k: np.atleast_2d(group[k][...].astype(np.float32).T).T for k in coll.features
-    }
-    n, slots = feats[coll.features[0]].shape
+        raise KeyError(f"collection {coll.name!r} (INPUTS/{group.name.split('/')[-1]}): missing columns {missing} "
+                       f"(features {coll.features}, selector columns {[c for c in columns if c not in coll.features]})")
+    feats = {k: np.atleast_2d(group[k][...].astype(np.float32).T).T for k in columns}
+    n, slots = feats[columns[0]].shape
     if coll.max > 1 and slots < coll.max:
         raise ValueError(
             f"collection {coll.name!r} has {slots} slots in the file, configuration asks for max {coll.max}"
@@ -150,9 +156,7 @@ class H5Dataset(Dataset):
         inputs: dict[str, torch.Tensor] = {}
 
         with h5py.File(path, "r") as f:
-            collections = {
-                c.name: _read_collection(f, c) for c in used_collections(spec)
-            }
+            collections = {c.name: _read_collection(f, c, columns_to_read(spec, c)) for c in used_collections(spec)}
             for role in spec.roles.values():
                 feats, present = collections[role.collection]
                 inputs[role.name] = self._role_tensor(
@@ -211,13 +215,9 @@ class H5Dataset(Dataset):
         return self._stack(coll, feats, idx, valid)
 
     @staticmethod
-    def _stack(
-        coll: Collection,
-        feats: dict[str, np.ndarray],
-        idx: np.ndarray,
-        valid: np.ndarray,
-    ) -> torch.Tensor:
-        """(N, len(features) + 1, n): features in configuration order, presence flag last, padding -1."""
+    def _stack(coll: Collection, feats: dict[str, np.ndarray], idx: np.ndarray, valid: np.ndarray) -> torch.Tensor:
+        """(N, len(features) + 1, n): features in configuration order, presence flag last, padding -1.
+        Columns read only for a selector are not stacked."""
         n, slots = idx.shape
         rows = np.arange(n)[:, None]
         x = np.full((n, len(coll.features) + 1, slots), -1.0, dtype=np.float32)
@@ -285,16 +285,5 @@ class H5Dataset(Dataset):
         return np.flatnonzero(~val), np.flatnonzero(val)
 
 
-__all__ = [
-    "COMPUTED_EVENT",
-    "EVENT_KEY",
-    "FOLD_KEY",
-    "GROUP_ALIASES",
-    "LABEL_KEYS",
-    "WEIGHT_KEY",
-    "H5Dataset",
-    "event_source",
-    "group_candidates",
-    "resolve_group",
-    "used_collections",
-]
+__all__ = ["H5Dataset", "GROUP_ALIASES", "COMPUTED_EVENT", "LABEL_KEYS", "WEIGHT_KEY", "FOLD_KEY", "EVENT_KEY",
+           "group_candidates", "used_collections", "columns_to_read", "event_source", "resolve_group"]
