@@ -2548,4 +2548,5 @@ packages:
   - onnx>=1.14 ; extra == 'export'
   - onnxruntime>=1.15 ; extra == 'export'
   - pytest>=7 ; extra == 'test'
+  - ruff ; extra == 'lint'
   requires_python: '>=3.9'
