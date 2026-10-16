@@ -375,3 +375,22 @@ def test_three_jet_event_scalars_stay_finite():
     prep = model._prepare(x)
     assert torch.isfinite(prep["event"]).all()
     assert torch.isfinite(model(x)["logits"]).all()
+
+
+def test_predict_and_predict_proba():
+    spec, model = build()
+    x = make_inputs(n=16, seed=12)
+    model.updateMeanStd(x)
+    model.initMeanStd()
+    probs = model.predict_proba(x)
+    preds = model.predict(x)
+    assert probs.shape == (16, len(spec.classes))
+    assert torch.allclose(probs.sum(dim=-1), torch.ones(16), atol=1e-5)
+    assert (probs >= 0.0).all() and (probs <= 1.0).all()
+    assert preds.shape == (16,)
+    assert (preds == probs.argmax(dim=-1)).all()
+
+    # Also test with numpy inputs
+    x_numpy = {k: v.numpy() for k, v in x.items()}
+    probs_np = model.predict_proba(x_numpy)
+    assert torch.allclose(probs_np, probs, atol=1e-6)

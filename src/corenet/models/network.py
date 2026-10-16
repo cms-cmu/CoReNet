@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -906,6 +907,45 @@ class CoReNet(nn.Module):
         ):
             if isinstance(m, GhostBatchNorm1d):
                 m.setGhostBatches(nGhostBatches)
+
+    @torch.no_grad()
+    def predict_proba(self, inputs) -> torch.Tensor:
+        """Predict class probabilities for the input events.
+
+        Args:
+            inputs: Dict of input tensors or numpy arrays matching the network specification.
+
+        Returns:
+            torch.Tensor of shape (N, n_classes) with normalized softmax probabilities.
+        """
+        was_training = self.training
+        self.eval()
+        device = next(self.parameters()).device
+        tensor_inputs = {}
+        for k, v in inputs.items():
+            if isinstance(v, np.ndarray):
+                tensor_inputs[k] = torch.from_numpy(v).to(device)
+            elif isinstance(v, torch.Tensor):
+                tensor_inputs[k] = v.to(device)
+            else:
+                tensor_inputs[k] = v
+        out = self(tensor_inputs)
+        probs = torch.softmax(out["logits"], dim=-1)
+        if was_training:
+            self.train()
+        return probs
+
+    @torch.no_grad()
+    def predict(self, inputs) -> torch.Tensor:
+        """Predict class index (argmax of probabilities) for the input events.
+
+        Args:
+            inputs: Dict of input tensors matching the network specification.
+
+        Returns:
+            torch.Tensor of shape (N,) with integer class indices.
+        """
+        return self.predict_proba(inputs).argmax(dim=-1)
 
 
 __all__ = ["CoReNet", "calcDeltaPhi", "log_kinematics", "matrixMdPhi", "matrixMdRdPhi"]
