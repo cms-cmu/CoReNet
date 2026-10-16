@@ -7,7 +7,8 @@ name = "CoReNet"
 version = "0.1.0"
 description = "CoReNet (Combinatorial Residual Network): a decay-chain-configurable neural network for event classification in collider physics"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.9"
 authors = [{ name = "[author list to be confirmed]" }]
 dependencies = [
@@ -17,10 +18,31 @@ dependencies = [
     "pyyaml>=5.4",
     "scikit-learn>=1.0",
 ]
+keywords = [
+    "particle-physics",
+    "machine-learning",
+    "pytorch",
+    "collider-physics",
+    "combinatorics",
+    "higgs",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 
 [project.optional-dependencies]
 export = ["onnx>=1.14", "onnxruntime>=1.15"]
 test = ["pytest>=7"]
+lint = ["ruff"]
 
 [project.scripts]
 corenet-train = "corenet.train:main"
@@ -33,3 +55,33 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes (undefined names, unused variables/imports)
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "RUF", # ruff-specific rules
+]
+ignore = [
+    "E501",   # line length (handled by ruff format)
+    "B905",   # zip() without strict=
+    "BLE001", # blind exception catching (validate.py catches exceptions on invalid user input)
+    "LOG015", # logging.info calls on root logger
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["RUF059", "B023", "E402"]
+
+

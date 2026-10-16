@@ -29,8 +29,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from .checkpoint import load_checkpoint
 from .data.h5 import H5Dataset
@@ -45,8 +45,11 @@ class ExportWrapper(nn.Module):
         self.input_names = list(model.leaf_order) + (["event"] if model.dA else [])
         self.view_names = [h for h in model.spec.hypotheses if h in model.selector]
         self.head_names = [o.name for o in model.spec.outputs[1:]]
-        self.output_names = (["class_probabilities"] + [f"views_{h}" for h in self.view_names]
-                             + [f"head_{o}" for o in self.head_names])
+        self.output_names = (
+            ["class_probabilities"]
+            + [f"views_{h}" for h in self.view_names]
+            + [f"head_{o}" for o in self.head_names]
+        )
 
     def forward(self, *tensors):
         out = self.model(dict(zip(self.input_names, tensors)))
@@ -57,11 +60,14 @@ class ExportWrapper(nn.Module):
 
 
 def _batch(ds: H5Dataset, names, start, n):
-    return tuple(ds.inputs[k][start:start + n].contiguous() for k in names)
+    return tuple(ds.inputs[k][start : start + n].contiguous() for k in names)
 
 
 def _max_diff(ref, got) -> float:
-    return max(float((torch.as_tensor(np.asarray(g)) - r).abs().max()) for r, g in zip(ref, got))
+    return max(
+        float((torch.as_tensor(np.asarray(g)) - r).abs().max())
+        for r, g in zip(ref, got)
+    )
 
 
 def export_torchscript(wrapper, example, path: Path):
@@ -84,33 +90,77 @@ def export_onnx(wrapper, example, path: Path, opset: int):
     _register_onnx_symbolics(opset)
     dynamic_axes = {k: {0: "batch"} for k in wrapper.input_names + wrapper.output_names}
     with torch.no_grad():
-        torch.onnx.export(wrapper, example, str(path), input_names=wrapper.input_names,
-                          output_names=wrapper.output_names, dynamic_axes=dynamic_axes,
-                          opset_version=opset, dynamo=False, do_constant_folding=True)
+        torch.onnx.export(
+            wrapper,
+            example,
+            str(path),
+            input_names=wrapper.input_names,
+            output_names=wrapper.output_names,
+            dynamic_axes=dynamic_axes,
+            opset_version=opset,
+            dynamo=False,
+            do_constant_folding=True,
+        )
     return path
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="corenet-export", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--checkpoint", required=True, help="model_fold{k}.pkl written by corenet-train")
-    p.add_argument("--input", required=True, help="HDF5 file providing the example / validation events")
+    p = argparse.ArgumentParser(
+        prog="corenet-export",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument(
+        "--checkpoint", required=True, help="model_fold{k}.pkl written by corenet-train"
+    )
+    p.add_argument(
+        "--input",
+        required=True,
+        help="HDF5 file providing the example / validation events",
+    )
     p.add_argument("--output-dir", required=True)
-    p.add_argument("--name", default=None, help="basename of the exported files (default: the checkpoint's)")
-    p.add_argument("--config", default=None, help="configuration file (default: the one stored in the checkpoint)")
-    p.add_argument("--formats", nargs="+", choices=["torchscript", "onnx"], default=["torchscript", "onnx"])
+    p.add_argument(
+        "--name",
+        default=None,
+        help="basename of the exported files (default: the checkpoint's)",
+    )
+    p.add_argument(
+        "--config",
+        default=None,
+        help="configuration file (default: the one stored in the checkpoint)",
+    )
+    p.add_argument(
+        "--formats",
+        nargs="+",
+        choices=["torchscript", "onnx"],
+        default=["torchscript", "onnx"],
+    )
     p.add_argument("--opset", type=int, default=17, help="ONNX opset version")
-    p.add_argument("--n-events", type=int, default=1024, help="events used to check the exported models")
-    p.add_argument("--atol", type=float, default=1e-4,
-                   help="maximum allowed |exported - PyTorch| of any output probability (float32 rounding is ~1e-5)")
+    p.add_argument(
+        "--n-events",
+        type=int,
+        default=1024,
+        help="events used to check the exported models",
+    )
+    p.add_argument(
+        "--atol",
+        type=float,
+        default=1e-4,
+        help="maximum allowed |exported - PyTorch| of any output probability (float32 rounding is ~1e-5)",
+    )
     return p
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+    )
     model, spec, ckpt = load_checkpoint(args.checkpoint, args.config, "cpu")
     wrapper = ExportWrapper(model).eval()
-    ds = H5Dataset(args.input, spec, rest_order=ckpt.get("metadata", {}).get("rest_order", "pt"))
+    ds = H5Dataset(
+        args.input, spec, rest_order=ckpt.get("metadata", {}).get("rest_order", "pt")
+    )
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     name = args.name or Path(args.checkpoint).stem
@@ -122,18 +172,31 @@ def main(argv=None):
     with torch.no_grad():
         refs = [wrapper(*x) for x in checks]
 
-    meta = {"checkpoint": str(args.checkpoint), "classes": spec.classes,
-            "inputs": {k: [None] + list(ds.inputs[k].shape[1:]) for k in wrapper.input_names},
-            "outputs": wrapper.output_names, "files": {}, "max_abs_diff": {}}
+    meta = {
+        "checkpoint": str(args.checkpoint),
+        "classes": spec.classes,
+        "inputs": {k: [None, *ds.inputs[k].shape[1:]] for k in wrapper.input_names},
+        "outputs": wrapper.output_names,
+        "files": {},
+        "max_abs_diff": {},
+    }
     status = {}
     if "torchscript" in args.formats:
         path = export_torchscript(wrapper, example, out_dir / f"{name}.pt")
         loaded = torch.jit.load(str(path))
         with torch.no_grad():
-            diff = max(_max_diff(r, [t.numpy() for t in loaded(*x)]) for r, x in zip(refs, checks))
-        meta["files"]["torchscript"], meta["max_abs_diff"]["torchscript"] = path.name, diff
+            diff = max(
+                _max_diff(r, [t.numpy() for t in loaded(*x)])
+                for r, x in zip(refs, checks)
+            )
+        meta["files"]["torchscript"], meta["max_abs_diff"]["torchscript"] = (
+            path.name,
+            diff,
+        )
         status["torchscript"] = diff <= args.atol
-        logging.info(f"TorchScript: {path} | max |diff| to PyTorch = {diff:.3e} on batches of {n} and {n2} events")
+        logging.info(
+            f"TorchScript: {path} | max |diff| to PyTorch = {diff:.3e} on batches of {n} and {n2} events"
+        )
     if "onnx" in args.formats:
         import onnx
         import onnxruntime as ort
@@ -141,22 +204,32 @@ def main(argv=None):
         path = export_onnx(wrapper, example, out_dir / f"{name}.onnx", args.opset)
         onnx.checker.check_model(onnx.load(str(path)))
         options = ort.SessionOptions()
-        options.intra_op_num_threads = torch.get_num_threads()      # not every core of a shared node
-        sess = ort.InferenceSession(str(path), options, providers=["CPUExecutionProvider"])
+        options.intra_op_num_threads = (
+            torch.get_num_threads()
+        )  # not every core of a shared node
+        sess = ort.InferenceSession(
+            str(path), options, providers=["CPUExecutionProvider"]
+        )
         feed_names = [i.name for i in sess.get_inputs()]
         diffs = []
         for r, x in zip(refs, checks):
-            feeds = {k: v.numpy() for k, v in zip(wrapper.input_names, x) if k in feed_names}
+            feeds = {
+                k: v.numpy() for k, v in zip(wrapper.input_names, x) if k in feed_names
+            }
             diffs.append(_max_diff(r, sess.run(wrapper.output_names, feeds)))
         diff = max(diffs)
         meta["files"]["onnx"], meta["max_abs_diff"]["onnx"] = path.name, diff
         meta["onnx_opset"] = args.opset
         status["onnx"] = diff <= args.atol
-        logging.info(f"ONNX (opset {args.opset}): {path} | max |diff| to PyTorch = {diff:.3e} on batches of {n} and {n2} events")
+        logging.info(
+            f"ONNX (opset {args.opset}): {path} | max |diff| to PyTorch = {diff:.3e} on batches of {n} and {n2} events"
+        )
     (out_dir / f"{name}.json").write_text(json.dumps(meta, indent=1))
     failed = [k for k, ok in status.items() if not ok]
     if failed:
-        raise SystemExit(f"exported {failed} differ from PyTorch by more than --atol={args.atol}: {meta['max_abs_diff']}")
+        raise SystemExit(
+            f"exported {failed} differ from PyTorch by more than --atol={args.atol}: {meta['max_abs_diff']}"
+        )
     logging.info(f"wrote {out_dir / (name + '.json')}")
     return meta
 

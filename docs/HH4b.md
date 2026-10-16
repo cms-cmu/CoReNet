@@ -154,10 +154,11 @@ The indices 0..3 in `01|23` number the four b jets in the order they were taken 
 
 ```python
 import h5py
+
 with h5py.File("runs/hh4b_full/eval_fold0.h5") as f:
     p_signal = f["class_probabilities"][:, 1]
-    pairing = f["views/HH"][...].argmax(1)       # 0: 01|23, 1: 02|13, 2: 03|12
-    rows = f["EVENT/index"][...]                 # rows of the events in hh4b_all.h5
+    pairing = f["views/HH"][...].argmax(1)  # 0: 01|23, 1: 02|13, 2: 03|12
+    rows = f["EVENT/index"][...]  # rows of the events in hh4b_all.h5
 ```
 
 ## Export

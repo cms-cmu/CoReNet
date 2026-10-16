@@ -43,8 +43,12 @@ from .evaluate import Batches, count_parameters, predict, write_predictions
 from .models.config import ConfigError, NetworkSpec, parse_config, read_config_dict
 from .models.network import CoReNet
 
-HEAD_PREFIXES = ("head_main.", "head_reduce.", "aux_heads.")   # trainable after the freeze epoch
-MIN_GHOST_BATCH_SIZE = 8       # single-pixel GBNs go NaN with one-event ghost batches
+HEAD_PREFIXES = (
+    "head_main.",
+    "head_reduce.",
+    "aux_heads.",
+)  # trainable after the freeze epoch
+MIN_GHOST_BATCH_SIZE = 8  # single-pixel GBNs go NaN with one-event ghost batches
 
 # training-recipe options: name -> default. Settable in the `trainer:` section of the configuration;
 # a command-line flag overrides the file.
@@ -63,10 +67,20 @@ RECIPE_DEFAULTS = {
 
 def batch_schedule(epoch: int, bs_init: int) -> tuple[int, int]:
     """(batch size, ghost batches) of an epoch: the batch size doubles at epochs 1, 3, 6 and 10."""
-    stage = 0 if epoch == 0 else 1 if epoch < 3 else 2 if epoch < 6 else 3 if epoch < 10 else 4
+    stage = (
+        0
+        if epoch == 0
+        else 1
+        if epoch < 3
+        else 2
+        if epoch < 6
+        else 3
+        if epoch < 10
+        else 4
+    )
     bs = bs_init << stage
     n_gb = (64, 16, 4, 1, 0)[stage]
-    return bs, min(n_gb, max(1, bs // MIN_GHOST_BATCH_SIZE))     # no-op for bs_init >= 512
+    return bs, min(n_gb, max(1, bs // MIN_GHOST_BATCH_SIZE))  # no-op for bs_init >= 512
 
 
 def freeze_heads(model: CoReNet) -> int:
@@ -78,7 +92,9 @@ def freeze_heads(model: CoReNet) -> int:
     return n
 
 
-def normalize_class_weights(labels: np.ndarray, weights: torch.Tensor, idx: np.ndarray, n_classes: int) -> torch.Tensor:
+def normalize_class_weights(
+    labels: np.ndarray, weights: torch.Tensor, idx: np.ndarray, n_classes: int
+) -> torch.Tensor:
     """Per-event weights with every class summing to 1 over ``idx``."""
     w = weights.clone()
     for c in range(n_classes):
@@ -107,8 +123,13 @@ def aux_targets(spec: NetworkSpec) -> dict[str, int]:
     return {o.name: i + 1 for i, o in enumerate(spec.outputs) if i > 0}
 
 
-def validation_metrics(model: CoReNet, data: Batches, val_idx: np.ndarray, labels: np.ndarray,
-                       weights: torch.Tensor) -> dict:
+def validation_metrics(
+    model: CoReNet,
+    data: Batches,
+    val_idx: np.ndarray,
+    labels: np.ndarray,
+    weights: torch.Tensor,
+) -> dict:
     """Weighted cross entropy and signal-vs-rest AUC on the validation fold(s).
 
     Side-effect free: the torch RNG state is saved and restored so the training stream is identical
@@ -123,26 +144,39 @@ def validation_metrics(model: CoReNet, data: Batches, val_idx: np.ndarray, label
     label = labels[val_idx]
     w = np.clip(weights.numpy()[val_idx], 0, None)
     p = np.clip(probs[np.arange(len(label)), label], 1e-12, None)
-    out = {"val_events": int(len(label)), "val_loss": float(-(w * np.log(p)).sum() / max(w.sum(), 1e-12))}
+    out = {
+        "val_events": len(label),
+        "val_loss": float(-(w * np.log(p)).sum() / max(w.sum(), 1e-12)),
+    }
     if 0 < int((label == 1).sum()) < len(label):
         out["val_auc"] = weighted_auc(label, probs[:, 1], w)
     return out
 
 
-def loss_of_batch(model: CoReNet, batch: dict, label: torch.Tensor, w: torch.Tensor,
-                  aux: dict[str, int], head_weights: dict[str, float]) -> torch.Tensor:
+def loss_of_batch(
+    model: CoReNet,
+    batch: dict,
+    label: torch.Tensor,
+    w: torch.Tensor,
+    aux: dict[str, int],
+    head_weights: dict[str, float],
+) -> torch.Tensor:
     """Weighted CE on the class logits + sum_o head_weight[o] * weighted BCE of the auxiliary heads."""
     out = model(batch)
     w_sum = w.sum()
     loss = (F.cross_entropy(out["logits"], label, reduction="none") * w).sum() / w_sum
     for name, cls in aux.items():
         target = (label == cls).to(out["heads"][name].dtype)
-        bce = F.binary_cross_entropy_with_logits(out["heads"][name], target, reduction="none")
+        bce = F.binary_cross_entropy_with_logits(
+            out["heads"][name], target, reduction="none"
+        )
         loss = loss + head_weights.get(name, 1.0) * (bce * w).sum() / w_sum
     return loss
 
 
-def train_fold(ds: H5Dataset, spec: NetworkSpec, config: dict, fold: int, args, device) -> Path:
+def train_fold(
+    ds: H5Dataset, spec: NetworkSpec, config: dict, fold: int, args, device
+) -> Path:
     torch.manual_seed(args.seed + fold)
     np.random.seed(args.seed + fold)
     n_classes = len(spec.classes)
@@ -152,15 +186,26 @@ def train_fold(ds: H5Dataset, spec: NetworkSpec, config: dict, fold: int, args, 
     if args.exclude_folds:
         keep = ~np.isin(ds.folds.numpy()[train_idx], args.exclude_folds)
         val_idx, train_idx = train_idx[~keep], train_idx[keep]
-    weights = normalize_class_weights(labels, ds.weights, train_idx, n_classes) if args.class_norm else ds.weights
+    weights = (
+        normalize_class_weights(labels, ds.weights, train_idx, n_classes)
+        if args.class_norm
+        else ds.weights
+    )
     # validation weights are class-normalised over the validation events, so val_loss is on the same
     # (class-balanced) footing as the training loss; training itself uses `weights` only
-    val_weights = (normalize_class_weights(labels, ds.weights, val_idx, n_classes)
-                   if (args.class_norm and len(val_idx)) else ds.weights)
-    logging.info(f"fold {fold}: {len(train_idx):,} training / {len(val_idx):,} validation / {len(test_idx):,} held-out events")
+    val_weights = (
+        normalize_class_weights(labels, ds.weights, val_idx, n_classes)
+        if (args.class_norm and len(val_idx))
+        else ds.weights
+    )
+    logging.info(
+        f"fold {fold}: {len(train_idx):,} training / {len(val_idx):,} validation / {len(test_idx):,} held-out events"
+    )
 
     model = CoReNet(spec, device=str(device)).to(device)
-    logging.info(f"{args.config}: classes {spec.classes}, {count_parameters(model):,} parameters")
+    logging.info(
+        f"{args.config}: classes {spec.classes}, {count_parameters(model):,} parameters"
+    )
     data = Batches(ds, device)
     w_dev = weights.to(device)
     aux, head_weights = aux_targets(spec), dict(spec.training.head_weights or {})
@@ -172,7 +217,9 @@ def train_fold(ds: H5Dataset, spec: NetworkSpec, config: dict, fold: int, args, 
     model.initMeanStd()
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=list(args.lr_milestones), gamma=args.lr_gamma)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer, milestones=list(args.lr_milestones), gamma=args.lr_gamma
+    )
     t0 = time.time()
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -183,7 +230,9 @@ def train_fold(ds: H5Dataset, spec: NetworkSpec, config: dict, fold: int, args, 
         model.setGhostBatches(n_gb)
         if epoch == args.freeze_epoch:
             n_trainable = freeze_heads(model)
-            logging.info(f"fold {fold}: frozen at epoch {epoch}, {n_trainable:,} trainable head parameters")
+            logging.info(
+                f"fold {fold}: frozen at epoch {epoch}, {n_trainable:,} trainable head parameters"
+            )
         model.train()
         loss_sum, w_sum = 0.0, 0.0
         for chunk, batch in data.iter(train_idx, bs, shuffle=True, drop_last=True):
@@ -199,65 +248,192 @@ def train_fold(ds: H5Dataset, spec: NetworkSpec, config: dict, fold: int, args, 
             w_sum += w.sum().item()
         scheduler.step()
         if args.save_every_epoch:
-            save_checkpoint(out_dir / f"model_fold{fold}_epoch{epoch:02d}.pkl", model, config, args.config,
-                            {"fold": fold, "epoch": epoch, "exclude_folds": args.exclude_folds, "input": str(args.input), **recipe})
-        entry = {"epoch": epoch, "batch_size": bs, "ghost_batches": n_gb, "lr": float(optimizer.param_groups[0]["lr"]),
-                 "train_loss": loss_sum / max(w_sum, 1e-12)}
+            save_checkpoint(
+                out_dir / f"model_fold{fold}_epoch{epoch:02d}.pkl",
+                model,
+                config,
+                args.config,
+                {
+                    "fold": fold,
+                    "epoch": epoch,
+                    "exclude_folds": args.exclude_folds,
+                    "input": str(args.input),
+                    **recipe,
+                },
+            )
+        entry = {
+            "epoch": epoch,
+            "batch_size": bs,
+            "ghost_batches": n_gb,
+            "lr": float(optimizer.param_groups[0]["lr"]),
+            "train_loss": loss_sum / max(w_sum, 1e-12),
+        }
         if len(val_idx):
             entry.update(validation_metrics(model, data, val_idx, labels, val_weights))
-            model.setGhostBatches(n_gb)                      # predict() set them to 0
+            model.setGhostBatches(n_gb)  # predict() set them to 0
         history.append(entry)
-        history_path.write_text(json.dumps({"fold": fold, "exclude_folds": args.exclude_folds, "config": str(args.config),
-                                            "classes": spec.classes, "recipe": recipe,
-                                            "n_train": int(len(train_idx)), "n_val": int(len(val_idx)),
-                                            "history": history}, indent=1))
-        logging.info(f"fold {fold} | epoch {epoch:02d} | bs {bs:6d} | gbn {n_gb:2d} | lr {optimizer.param_groups[0]['lr']:.2e} | loss {entry['train_loss']:.5f}"
-                     + (f" | val loss {entry['val_loss']:.5f} | val auc {entry.get('val_auc', float('nan')):.5f}" if len(val_idx) else ""))
+        history_path.write_text(
+            json.dumps(
+                {
+                    "fold": fold,
+                    "exclude_folds": args.exclude_folds,
+                    "config": str(args.config),
+                    "classes": spec.classes,
+                    "recipe": recipe,
+                    "n_train": len(train_idx),
+                    "n_val": len(val_idx),
+                    "history": history,
+                },
+                indent=1,
+            )
+        )
+        logging.info(
+            f"fold {fold} | epoch {epoch:02d} | bs {bs:6d} | gbn {n_gb:2d} | lr {optimizer.param_groups[0]['lr']:.2e} | loss {entry['train_loss']:.5f}"
+            + (
+                f" | val loss {entry['val_loss']:.5f} | val auc {entry.get('val_auc', float('nan')):.5f}"
+                if len(val_idx)
+                else ""
+            )
+        )
 
     ckpt = out_dir / f"model_fold{fold}.pkl"
-    save_checkpoint(ckpt, model, config, args.config,
-                    {"fold": fold, "epoch": args.epochs - 1, "exclude_folds": args.exclude_folds, "input": str(args.input), **recipe})
+    save_checkpoint(
+        ckpt,
+        model,
+        config,
+        args.config,
+        {
+            "fold": fold,
+            "epoch": args.epochs - 1,
+            "exclude_folds": args.exclude_folds,
+            "input": str(args.input),
+            **recipe,
+        },
+    )
     probs, views, heads = predict(model, data, test_idx)
-    write_predictions(out_dir / f"predictions_fold{fold}.h5", ds, test_idx, probs, views, heads, spec,
-                      attrs={"checkpoint": str(ckpt), "config": str(Path(args.config).resolve()),
-                             "n_parameters": count_parameters(model), "fold": fold})
-    logging.info(f"fold {fold}: saved {ckpt.name}, {history_path.name} and predictions ({time.time() - t0:.0f}s)")
+    write_predictions(
+        out_dir / f"predictions_fold{fold}.h5",
+        ds,
+        test_idx,
+        probs,
+        views,
+        heads,
+        spec,
+        attrs={
+            "checkpoint": str(ckpt),
+            "config": str(Path(args.config).resolve()),
+            "n_parameters": count_parameters(model),
+            "fold": fold,
+        },
+    )
+    logging.info(
+        f"fold {fold}: saved {ckpt.name}, {history_path.name} and predictions ({time.time() - t0:.0f}s)"
+    )
     return ckpt
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="corenet-train", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--config", required=True, help="network configuration (.yaml or .json)")
-    p.add_argument("--input", required=True, help="HDF5 file with all folds (docs/Dataset.md)")
+    p = argparse.ArgumentParser(
+        prog="corenet-train",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument(
+        "--config", required=True, help="network configuration (.yaml or .json)"
+    )
+    p.add_argument(
+        "--input", required=True, help="HDF5 file with all folds (docs/Dataset.md)"
+    )
     p.add_argument("--output-dir", default="runs/corenet")
-    p.add_argument("--fold", type=int, default=-1, help="held-out (test) fold, or -1 for every fold in turn")
-    p.add_argument("--exclude-folds", type=int, nargs="*", default=[],
-                   help="folds left out of training and used for per-epoch validation")
-    g = p.add_argument_group("training recipe (default: the `trainer:` section of --config, else the built-in value)")
-    g.add_argument("--epochs", type=int, help=f"number of epochs [{RECIPE_DEFAULTS['epochs']}]")
-    g.add_argument("--freeze-epoch", type=int, help=f"epoch at which all but the output heads are frozen [{RECIPE_DEFAULTS['freeze_epoch']}]")
-    g.add_argument("--lr", type=float, help=f"Adam learning rate [{RECIPE_DEFAULTS['lr']}]")
-    g.add_argument("--lr-milestones", type=int, nargs="*", help="epochs after which the learning rate is multiplied by --lr-gamma [15 .. 24]")
-    g.add_argument("--lr-gamma", type=float, help=f"learning-rate decay factor [{RECIPE_DEFAULTS['lr_gamma']}]")
-    g.add_argument("--batch-size-init", type=int, help=f"epoch-0 batch size; doubles at epochs 1, 3, 6, 10 [{RECIPE_DEFAULTS['batch_size_init']}]")
-    g.add_argument("--class-norm", action=argparse.BooleanOptionalAction, default=None,
-                   help="normalise the weights of every class to 1 over the training set [on]")
-    g.add_argument("--seed", type=int, help=f"random seed (the seed of fold k is seed + k) [{RECIPE_DEFAULTS['seed']}]")
-    g.add_argument("--rest-order", choices=["pt", "selector"], help="ordering of the 'rest' selector [pt]")
-    p.add_argument("--save-every-epoch", action="store_true", help="also save model_fold{k}_epoch{e}.pkl after every epoch")
-    p.add_argument("--device", default="cuda", help="torch device; falls back to cpu when CUDA is unavailable")
+    p.add_argument(
+        "--fold",
+        type=int,
+        default=-1,
+        help="held-out (test) fold, or -1 for every fold in turn",
+    )
+    p.add_argument(
+        "--exclude-folds",
+        type=int,
+        nargs="*",
+        default=[],
+        help="folds left out of training and used for per-epoch validation",
+    )
+    g = p.add_argument_group(
+        "training recipe (default: the `trainer:` section of --config, else the built-in value)"
+    )
+    g.add_argument(
+        "--epochs", type=int, help=f"number of epochs [{RECIPE_DEFAULTS['epochs']}]"
+    )
+    g.add_argument(
+        "--freeze-epoch",
+        type=int,
+        help=f"epoch at which all but the output heads are frozen [{RECIPE_DEFAULTS['freeze_epoch']}]",
+    )
+    g.add_argument(
+        "--lr", type=float, help=f"Adam learning rate [{RECIPE_DEFAULTS['lr']}]"
+    )
+    g.add_argument(
+        "--lr-milestones",
+        type=int,
+        nargs="*",
+        help="epochs after which the learning rate is multiplied by --lr-gamma [15 .. 24]",
+    )
+    g.add_argument(
+        "--lr-gamma",
+        type=float,
+        help=f"learning-rate decay factor [{RECIPE_DEFAULTS['lr_gamma']}]",
+    )
+    g.add_argument(
+        "--batch-size-init",
+        type=int,
+        help=f"epoch-0 batch size; doubles at epochs 1, 3, 6, 10 [{RECIPE_DEFAULTS['batch_size_init']}]",
+    )
+    g.add_argument(
+        "--class-norm",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="normalise the weights of every class to 1 over the training set [on]",
+    )
+    g.add_argument(
+        "--seed",
+        type=int,
+        help=f"random seed (the seed of fold k is seed + k) [{RECIPE_DEFAULTS['seed']}]",
+    )
+    g.add_argument(
+        "--rest-order",
+        choices=["pt", "selector"],
+        help="ordering of the 'rest' selector [pt]",
+    )
+    p.add_argument(
+        "--save-every-epoch",
+        action="store_true",
+        help="also save model_fold{k}_epoch{e}.pkl after every epoch",
+    )
+    p.add_argument(
+        "--device",
+        default="cuda",
+        help="torch device; falls back to cpu when CUDA is unavailable",
+    )
     return p
 
 
 def _check_recipe(r: dict) -> None:
     """Types and ranges of the training-recipe options."""
-    is_int = lambda x: isinstance(x, int) and not isinstance(x, bool)          # noqa: E731
-    is_num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)  # noqa: E731
+
+    def is_int(x):
+        return isinstance(x, int) and not isinstance(x, bool)
+
+    def is_num(x):
+        return isinstance(x, (int, float)) and not isinstance(x, bool)
+
     rules = {
         "epochs": (lambda x: is_int(x) and x >= 1, "an integer >= 1"),
         "freeze_epoch": (lambda x: is_int(x) and x >= 0, "an integer >= 0"),
         "lr": (lambda x: is_num(x) and x > 0, "a number > 0"),
-        "lr_milestones": (lambda x: isinstance(x, list) and all(is_int(e) and e >= 0 for e in x), "a list of integers >= 0"),
+        "lr_milestones": (
+            lambda x: isinstance(x, list) and all(is_int(e) and e >= 0 for e in x),
+            "a list of integers >= 0",
+        ),
         "lr_gamma": (lambda x: is_num(x) and x > 0, "a number > 0"),
         "batch_size_init": (lambda x: is_int(x) and x >= 1, "an integer >= 1"),
         "class_norm": (lambda x: isinstance(x, bool), "true or false"),
@@ -276,7 +452,9 @@ def resolve_recipe(args, config: dict):
         raise ConfigError("trainer must be a mapping")
     unknown = set(section) - set(RECIPE_DEFAULTS)
     if unknown:
-        raise ConfigError(f"trainer: unknown keys {sorted(unknown)} (known: {', '.join(RECIPE_DEFAULTS)})")
+        raise ConfigError(
+            f"trainer: unknown keys {sorted(unknown)} (known: {', '.join(RECIPE_DEFAULTS)})"
+        )
     for key, default in RECIPE_DEFAULTS.items():
         if getattr(args, key) is None:
             setattr(args, key, section.get(key, default))
@@ -286,14 +464,22 @@ def resolve_recipe(args, config: dict):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+    )
     config = read_config_dict(args.config)
     spec = parse_config(config)
     resolve_recipe(args, config)
-    device = torch.device(args.device if torch.cuda.is_available() and args.device.startswith("cuda") else "cpu")
+    device = torch.device(
+        args.device
+        if torch.cuda.is_available() and args.device.startswith("cuda")
+        else "cpu"
+    )
     ds = H5Dataset(args.input, spec, rest_order=args.rest_order)
-    logging.info(f"{args.input}: {len(ds):,} events, device={device}, recipe "
-                 + ", ".join(f"{k}={getattr(args, k)}" for k in RECIPE_DEFAULTS))
+    logging.info(
+        f"{args.input}: {len(ds):,} events, device={device}, recipe "
+        + ", ".join(f"{k}={getattr(args, k)}" for k in RECIPE_DEFAULTS)
+    )
     folds = sorted(set(ds.folds.tolist())) if args.fold < 0 else [args.fold]
     for fold in folds:
         train_fold(ds, spec, config, fold, args, device)

@@ -1,5 +1,7 @@
 # CoReNet: Combinatorial Residual Network
 
+[![CI](https://github.com/cms-cmu/CoReNet/actions/workflows/ci.yml/badge.svg)](https://github.com/cms-cmu/CoReNet/actions/workflows/ci.yml)
+
 A library for training and evaluating CoReNet classifiers on collider events. Originally developed for
 HH → bb̄bb̄, it supports arbitrary final states described by their decay chain.
 
@@ -10,7 +12,7 @@ installs the same conda-forge builds of Python, PyTorch (with its own CUDA and c
 other dependency on any Linux x86-64 machine, and installs the package itself in editable mode:
 
 ```bash
-git clone https://github.com/[owner]/CoReNet.git     # URL to be confirmed
+git clone https://github.com/cms-cmu/CoReNet.git
 cd CoReNet
 pixi install                     # CUDA build of PyTorch (any NVIDIA GPU supported by CUDA 12)
 pixi shell                       # activate; or prefix every command with `pixi run`

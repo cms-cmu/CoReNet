@@ -13,8 +13,8 @@ Tensors are laid out ``(batch, features, pixels)``.
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from .fourvectors import NonLU
 from .variance import TensorVariance
@@ -31,22 +31,47 @@ class GhostBatchNorm1d(nn.Module):
     affine transform.
     """
 
-    def __init__(self, features, ghost_batch_size=32, number_of_ghost_batches=64, nAveraging=1, stride=1, eta=0.9,
-                 bias=True, device="cuda", name="", conv=False, features_out=None, phase_symmetric=False):
+    def __init__(
+        self,
+        features,
+        ghost_batch_size=32,
+        number_of_ghost_batches=64,
+        nAveraging=1,
+        stride=1,
+        eta=0.9,
+        bias=True,
+        device="cuda",
+        name="",
+        conv=False,
+        features_out=None,
+        phase_symmetric=False,
+    ):
         super().__init__()
         self.name = name
         self.stride = stride
         self.device = device
         self.features = features
         self.features_out = features_out if features_out is not None else self.features
-        self.register_buffer("ghost_batch_size", torch.tensor(ghost_batch_size, dtype=torch.long))
-        self.register_buffer("nGhostBatches", torch.tensor(number_of_ghost_batches * nAveraging, dtype=torch.long))
+        self.register_buffer(
+            "ghost_batch_size", torch.tensor(ghost_batch_size, dtype=torch.long)
+        )
+        self.register_buffer(
+            "nGhostBatches",
+            torch.tensor(number_of_ghost_batches * nAveraging, dtype=torch.long),
+        )
         self.conv = False
         self.gamma = None
         self.bias = None
         if conv:
-            self.conv = conv1d(self.features, self.features_out, self.stride, self.stride, name="%s conv" % name,
-                               bias=bias, phase_symmetric=phase_symmetric)
+            self.conv = conv1d(
+                self.features,
+                self.features_out,
+                self.stride,
+                self.stride,
+                name=f"{name} conv",
+                bias=bias,
+                phase_symmetric=phase_symmetric,
+            )
         else:
             self.gamma = nn.Parameter(torch.ones(self.features))
             if bias:
@@ -57,8 +82,12 @@ class GhostBatchNorm1d(nn.Module):
 
         self.register_buffer("eps", torch.tensor(1e-5, dtype=torch.float))
         self.register_buffer("eta", torch.tensor(eta, dtype=torch.float))
-        self.register_buffer("m", torch.zeros((1, 1, self.stride, self.features), dtype=torch.float))
-        self.register_buffer("s", torch.ones((1, 1, self.stride, self.features), dtype=torch.float))
+        self.register_buffer(
+            "m", torch.zeros((1, 1, self.stride, self.features), dtype=torch.float)
+        )
+        self.register_buffer(
+            "s", torch.ones((1, 1, self.stride, self.features), dtype=torch.float)
+        )
         self.register_buffer("zero", torch.tensor(0.0, dtype=torch.float))
         self.register_buffer("one", torch.tensor(1.0, dtype=torch.float))
         self.register_buffer("two", torch.tensor(2.0, dtype=torch.float))
@@ -68,7 +97,12 @@ class GhostBatchNorm1d(nn.Module):
         """Accumulate input statistics (``mask`` True = ignore that pixel). Only for stride 1."""
         batch_size = x.shape[0]
         pixels = x.shape[2]
-        x = x.detach().transpose(1, 2).contiguous().view(batch_size * pixels, 1, self.features)
+        x = (
+            x.detach()
+            .transpose(1, 2)
+            .contiguous()
+            .view(batch_size * pixels, 1, self.features)
+        )
         if mask is not None:
             mask = mask.detach().view(batch_size * pixels)
             x = x[mask == 0, :, :]
@@ -89,7 +123,9 @@ class GhostBatchNorm1d(nn.Module):
         self.runningStats = False
 
     def setGhostBatches(self, nGhostBatches):
-        self.nGhostBatches = torch.tensor(nGhostBatches, dtype=torch.long).to(self.nGhostBatches.device)
+        self.nGhostBatches = torch.tensor(nGhostBatches, dtype=torch.long).to(
+            self.nGhostBatches.device
+        )
 
     def forward(self, x, mask=None):
         batch_size = x.shape[0]
@@ -98,21 +134,42 @@ class GhostBatchNorm1d(nn.Module):
 
         if self.training and self.nGhostBatches != 0:
             self.ghost_batch_size = batch_size // self.nGhostBatches.abs()
-            x = (x.transpose(1, 2).contiguous()
-                 .view(self.nGhostBatches.abs(), self.ghost_batch_size * pixel_groups, self.stride, self.features))
+            x = (
+                x.transpose(1, 2)
+                .contiguous()
+                .view(
+                    self.nGhostBatches.abs(),
+                    self.ghost_batch_size * pixel_groups,
+                    self.stride,
+                    self.features,
+                )
+            )
             if mask is None:
-                gbm = x.mean(dim=1, keepdim=True)                                  # ghost-batch mean ...
-                gbs = (x.var(dim=1, keepdim=True) + self.eps).sqrt()               # ... and standard deviation
+                gbm = x.mean(dim=1, keepdim=True)  # ghost-batch mean ...
+                gbs = (
+                    x.var(dim=1, keepdim=True) + self.eps
+                ).sqrt()  # ... and standard deviation
             else:
                 # masked mean and std for each ghost batch
-                mask = mask.view(self.nGhostBatches.abs(), self.ghost_batch_size * pixel_groups, self.stride, 1)
+                mask = mask.view(
+                    self.nGhostBatches.abs(),
+                    self.ghost_batch_size * pixel_groups,
+                    self.stride,
+                    1,
+                )
                 nUnmasked = (mask == 0).sum(dim=1, keepdim=True).float()
                 unmasked0 = (nUnmasked == self.zero).float()
                 unmasked1 = (nUnmasked == self.one).float()
-                denomMean = nUnmasked + unmasked0                                   # prevent divide by zero
-                denomVar = nUnmasked + unmasked0 * self.two + unmasked1 - self.one  # ... with Bessel correction
+                denomMean = nUnmasked + unmasked0  # prevent divide by zero
+                denomVar = (
+                    nUnmasked + unmasked0 * self.two + unmasked1 - self.one
+                )  # ... with Bessel correction
                 gbm = x.masked_fill(mask, 0).sum(dim=1, keepdim=True) / denomMean
-                gbs = (((x - gbm).masked_fill(mask, 0) ** 2).sum(dim=1, keepdim=True) / denomVar + self.eps).sqrt()
+                gbs = (
+                    ((x - gbm).masked_fill(mask, 0) ** 2).sum(dim=1, keepdim=True)
+                    / denomVar
+                    + self.eps
+                ).sqrt()
 
             if self.runningStats:  # running mean and standard deviation
                 bm = gbm.detach().mean(dim=0, keepdim=True)
@@ -134,7 +191,9 @@ class GhostBatchNorm1d(nn.Module):
                 x = x / self.s
         else:
             # running (or frozen) statistics
-            x = x.transpose(1, 2).view(batch_size, pixel_groups, self.stride, self.features)
+            x = x.transpose(1, 2).view(
+                batch_size, pixel_groups, self.stride, self.features
+            )
             x = x - self.m
             x = x / self.s
 
@@ -153,8 +212,17 @@ class conv1d(nn.Module):
     """``nn.Conv1d`` wrapper; with ``phase_symmetric`` it computes half the output channels and
     returns ``cat(x, -x)`` plus a separate bias (https://arxiv.org/abs/1603.05201)."""
 
-    def __init__(self, in_channels, out_channels=None, kernel_size=1, stride=1, bias=True, name="",
-                 phase_symmetric=False, device=None):
+    def __init__(
+        self,
+        in_channels,
+        out_channels=None,
+        kernel_size=1,
+        stride=1,
+        bias=True,
+        name="",
+        phase_symmetric=False,
+        device=None,
+    ):
         super().__init__()
         self.bias = bias and not phase_symmetric
         self.phase_symmetric = phase_symmetric
@@ -164,7 +232,13 @@ class conv1d(nn.Module):
             self.out_channels = self.out_channels // 2
         # unused by the forward pass; kept so that checkpoints keep the same state-dict keys
         self.register_buffer("eps", torch.tensor(1e-5, dtype=torch.float))
-        self.module = nn.Conv1d(self.in_channels, self.out_channels, kernel_size, stride=stride, bias=self.bias)
+        self.module = nn.Conv1d(
+            self.in_channels,
+            self.out_channels,
+            kernel_size,
+            stride=stride,
+            bias=self.bias,
+        )
         if self.phase_symmetric and bias:
             self.bias = nn.Parameter(torch.zeros(1, self.out_channels * 2, 1))
         self.name = name
@@ -218,22 +292,36 @@ class MinimalAttention(nn.Module):
     a plain sum. ``use_kv_proj``: bottleneck query/key projections (d -> d/2) and a value projection.
     """
 
-    def __init__(self, dim=8, heads=1, phase_symmetric=True, use_attention_gate=False, use_kv_proj=False, device="cuda"):
+    def __init__(
+        self,
+        dim=8,
+        heads=1,
+        phase_symmetric=True,
+        use_attention_gate=False,
+        use_kv_proj=False,
+        device="cuda",
+    ):
         super().__init__()
         self.device = device
         self.d = dim
         self.phase_symmetric = phase_symmetric
-        self.h = heads                                                            # attention heads
-        self.dh = self.d // self.h                                                # pixel width per head
+        self.h = heads  # attention heads
+        self.dh = self.d // self.h  # pixel width per head
         self.use_attention_gate = use_attention_gate
         self.use_kv_proj = use_kv_proj
 
         if self.use_kv_proj:
             self.dh_k = self.d // (2 * self.h)
             self.dim_k = self.dh_k * self.h
-            self.q_proj = conv1d(self.d, out_channels=self.dim_k, kernel_size=1, bias=True, device=device)
-            self.k_proj = conv1d(self.d, out_channels=self.dim_k, kernel_size=1, bias=True, device=device)
-            self.v_proj = conv1d(self.d, out_channels=self.d, kernel_size=1, bias=True, device=device)
+            self.q_proj = conv1d(
+                self.d, out_channels=self.dim_k, kernel_size=1, bias=True, device=device
+            )
+            self.k_proj = conv1d(
+                self.d, out_channels=self.dim_k, kernel_size=1, bias=True, device=device
+            )
+            self.v_proj = conv1d(
+                self.d, out_channels=self.d, kernel_size=1, bias=True, device=device
+            )
 
         self.q_GBN = GhostBatchNorm1d(self.d, name="attention q GBN", device=device)
         self.v_GBN = GhostBatchNorm1d(self.d, name="attention v GBN", device=device)
@@ -242,13 +330,24 @@ class MinimalAttention(nn.Module):
             self.score_gate = AttentionGate(self.dh, 1)
             self.value_gate = AttentionGate(self.dh, self.dh)
 
-        self.score_GBN = GhostBatchNorm1d(self.h, name="attention score GBN", device=device)
-        self.conv = GhostBatchNorm1d(dim, phase_symmetric=phase_symmetric, conv=True, name="attention out convolution",
-                                     device=device)
+        self.score_GBN = GhostBatchNorm1d(
+            self.h, name="attention score GBN", device=device
+        )
+        self.conv = GhostBatchNorm1d(
+            dim,
+            phase_symmetric=phase_symmetric,
+            conv=True,
+            name="attention out convolution",
+            device=device,
+        )
         self.negativeInfinity = torch.tensor(-1e9, dtype=torch.float).to(device)
 
     def attention(self, q, v, mask, qv=None, k=None):
-        bs, qsl, vsl = q.shape[0], q.shape[3], v.shape[4]                        # batch, query pixels, value pixels
+        bs, qsl, vsl = (
+            q.shape[0],
+            q.shape[3],
+            v.shape[4],
+        )  # batch, query pixels, value pixels
         # with key projection: q (bs,h,dh_k,qsl,1), k (bs,h,dh_k,1,vsl), v (bs,h,dh,1,vsl)
         # otherwise:           q (bs,h,dh,qsl,1),                     v (bs,h,dh,1,vsl)
         if k is not None:
@@ -265,13 +364,19 @@ class MinimalAttention(nn.Module):
 
         # masked ghost batch normalisation of the (bs,h,qsl,vsl) scores
         score = score.view(bs, self.h, qsl * vsl)
-        score = self.score_GBN(score, mask.view(bs, qsl * vsl) if mask is not None else None)
-        score = score.view(bs, self.h, 1, qsl, vsl)  # extra dim for broadcasting over features
+        score = self.score_GBN(
+            score, mask.view(bs, qsl * vsl) if mask is not None else None
+        )
+        score = score.view(
+            bs, self.h, 1, qsl, vsl
+        )  # extra dim for broadcasting over features
         if mask is not None:
             score = score.masked_fill(mask, self.negativeInfinity)
 
-        v_weights = F.softmax(score, dim=4)          # which values best correspond to each query
-        score = torch.sigmoid(score)                 # no value has to be picked if none match
+        v_weights = F.softmax(
+            score, dim=4
+        )  # which values best correspond to each query
+        score = torch.sigmoid(score)  # no value has to be picked if none match
         v_weights = v_weights * score
 
         if qv is not None:
@@ -280,10 +385,10 @@ class MinimalAttention(nn.Module):
                 v = v + self.value_gate(qv_perm).permute(0, 1, 4, 2, 3)
             else:
                 v = v + qv
-        if mask is not None:                         # mask is (bs, 1, 1, qsl, vsl)
+        if mask is not None:  # mask is (bs, 1, 1, qsl, vsl)
             v_weights = v_weights.masked_fill(mask, 0)
             v = v.masked_fill(mask, 0)
-        q_res = (v * v_weights).sum(dim=4)           # weighted sum of values, (bs, h, dh, qsl)
+        q_res = (v * v_weights).sum(dim=4)  # weighted sum of values, (bs, h, dh, qsl)
         return q_res, v_weights
 
     def setGhostBatches(self, nGhostBatches):
@@ -343,4 +448,4 @@ class MinimalAttention(nn.Module):
         return q, q0, v_weights
 
 
-__all__ = ["GhostBatchNorm1d", "conv1d", "linear", "AttentionGate", "MinimalAttention"]
+__all__ = ["AttentionGate", "GhostBatchNorm1d", "MinimalAttention", "conv1d", "linear"]

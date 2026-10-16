@@ -40,7 +40,6 @@ from torch.utils.data import Dataset
 
 from ..models.config import Collection, NetworkSpec, RoleSpec
 
-
 # collection name (lower case) -> group names accepted in INPUTS, in order of preference
 GROUP_ALIASES = {
     "jets": ("Jets", "Source"),
@@ -49,8 +48,11 @@ GROUP_ALIASES = {
     "met": ("Met", "MET"),
 }
 COMPUTED_EVENT = ("nSelJets", "HT")
-BTAG_PRIORITY = 1e6                       # btag dominates the sort key, pT breaks ties
-LABEL_KEYS = ("EVENT/label", "CLASSIFICATIONS/EVENT/signal")   # first one present is used
+BTAG_PRIORITY = 1e6  # btag dominates the sort key, pT breaks ties
+LABEL_KEYS = (
+    "EVENT/label",
+    "CLASSIFICATIONS/EVENT/signal",
+)  # first one present is used
 WEIGHT_KEY, FOLD_KEY, EVENT_KEY = "EVENT/weight", "EVENT/fold", "EVENT/event"
 
 
@@ -62,7 +64,11 @@ def group_candidates(name: str) -> tuple[str, ...]:
 
 def used_collections(spec: NetworkSpec) -> list[Collection]:
     """Collections the loader reads: those used by a role, and every max-1 collection (a leaf)."""
-    return [c for c in spec.collections.values() if c.max == 1 or any(r.collection == c.name for r in spec.roles.values())]
+    return [
+        c
+        for c in spec.collections.values()
+        if c.max == 1 or any(r.collection == c.name for r in spec.roles.values())
+    ]
 
 
 def event_source(spec: NetworkSpec, name: str) -> tuple[str, str]:
@@ -80,21 +86,35 @@ def resolve_group(f: h5py.File, name: str) -> str:
     for cand in group_candidates(name):
         if cand.lower() in available:
             return available[cand.lower()]
-    raise KeyError(f"collection {name!r}: no INPUTS group named {name!r} "
-                   f"or {list(GROUP_ALIASES.get(name.lower(), ()))} in the file (has {sorted(available.values())})")
+    raise KeyError(
+        f"collection {name!r}: no INPUTS group named {name!r} "
+        f"or {list(GROUP_ALIASES.get(name.lower(), ()))} in the file (has {sorted(available.values())})"
+    )
 
 
-def _read_collection(f: h5py.File, coll: Collection) -> tuple[dict[str, np.ndarray], np.ndarray]:
+def _read_collection(
+    f: h5py.File, coll: Collection
+) -> tuple[dict[str, np.ndarray], np.ndarray]:
     """(features, present) of one collection, both shaped (N, slots in the file)."""
     group = f["INPUTS"][resolve_group(f, coll.name)]
     missing = [k for k in coll.features if k not in group]
     if missing:
-        raise KeyError(f"collection {coll.name!r} (INPUTS/{group.name.split('/')[-1]}): missing features {missing}")
-    feats = {k: np.atleast_2d(group[k][...].astype(np.float32).T).T for k in coll.features}
+        raise KeyError(
+            f"collection {coll.name!r} (INPUTS/{group.name.split('/')[-1]}): missing features {missing}"
+        )
+    feats = {
+        k: np.atleast_2d(group[k][...].astype(np.float32).T).T for k in coll.features
+    }
     n, slots = feats[coll.features[0]].shape
     if coll.max > 1 and slots < coll.max:
-        raise ValueError(f"collection {coll.name!r} has {slots} slots in the file, configuration asks for max {coll.max}")
-    present = group["MASK"][...].astype(bool) if "MASK" in group else np.ones((n, slots), dtype=bool)
+        raise ValueError(
+            f"collection {coll.name!r} has {slots} slots in the file, configuration asks for max {coll.max}"
+        )
+    present = (
+        group["MASK"][...].astype(bool)
+        if "MASK" in group
+        else np.ones((n, slots), dtype=bool)
+    )
     return feats, present
 
 
@@ -117,50 +137,86 @@ def _take(key: np.ndarray, avail: np.ndarray, n: int) -> tuple[np.ndarray, np.nd
 class H5Dataset(Dataset):
     def __init__(self, path: str | Path, spec: NetworkSpec, rest_order: str = "pt"):
         if rest_order not in ("pt", "selector"):
-            raise ValueError(f"rest_order must be 'pt' or 'selector', got {rest_order!r}")
+            raise ValueError(
+                f"rest_order must be 'pt' or 'selector', got {rest_order!r}"
+            )
         self.spec, self.path, self.rest_order = spec, Path(path), rest_order
-        self._taken: dict[str, np.ndarray] = {}        # per collection: members already consumed by a role
-        self._last_key: dict[str, np.ndarray] = {}     # per collection: sort key of the last explicit selector
+        self._taken: dict[
+            str, np.ndarray
+        ] = {}  # per collection: members already consumed by a role
+        self._last_key: dict[
+            str, np.ndarray
+        ] = {}  # per collection: sort key of the last explicit selector
         inputs: dict[str, torch.Tensor] = {}
 
         with h5py.File(path, "r") as f:
-            collections = {c.name: _read_collection(f, c) for c in used_collections(spec)}
+            collections = {
+                c.name: _read_collection(f, c) for c in used_collections(spec)
+            }
             for role in spec.roles.values():
                 feats, present = collections[role.collection]
-                inputs[role.name] = self._role_tensor(role, spec.collections[role.collection], feats, present)
+                inputs[role.name] = self._role_tensor(
+                    role, spec.collections[role.collection], feats, present
+                )
             for c in spec.collections.values():
                 if c.max == 1 and c.name not in inputs and c.name in collections:
                     feats, present = collections[c.name]
-                    inputs[c.name] = self._stack(c, feats, np.zeros((len(present), 1), dtype=np.int64), present)
+                    inputs[c.name] = self._stack(
+                        c, feats, np.zeros((len(present), 1), dtype=np.int64), present
+                    )
             inputs["event"] = self._event_tensor(f, collections)
             n = len(inputs["event"])
 
             self.labels = torch.from_numpy(self._labels(f, n))
-            self.weights = torch.from_numpy(f[WEIGHT_KEY][...].astype(np.float32)) if WEIGHT_KEY in f \
+            self.weights = (
+                torch.from_numpy(f[WEIGHT_KEY][...].astype(np.float32))
+                if WEIGHT_KEY in f
                 else torch.ones(n, dtype=torch.float32)
-            self.folds = torch.from_numpy(f[FOLD_KEY][...].astype(np.int64)) if FOLD_KEY in f \
+            )
+            self.folds = (
+                torch.from_numpy(f[FOLD_KEY][...].astype(np.int64))
+                if FOLD_KEY in f
                 else torch.zeros(n, dtype=torch.int64)
-            self.events = torch.from_numpy(f[EVENT_KEY][...].astype(np.int64)) if EVENT_KEY in f \
+            )
+            self.events = (
+                torch.from_numpy(f[EVENT_KEY][...].astype(np.int64))
+                if EVENT_KEY in f
                 else torch.arange(n, dtype=torch.int64)
+            )
         self.inputs = inputs
 
     # ---------------------------------------------------------------- construction
-    def _role_tensor(self, role: RoleSpec, coll: Collection, feats: dict[str, np.ndarray], present: np.ndarray) -> torch.Tensor:
+    def _role_tensor(
+        self,
+        role: RoleSpec,
+        coll: Collection,
+        feats: dict[str, np.ndarray],
+        present: np.ndarray,
+    ) -> torch.Tensor:
         taken = self._taken.setdefault(role.collection, np.zeros_like(present))
         if role.selector == "rest":
-            key = self._last_key.get(role.collection) if self.rest_order == "selector" else None
+            key = (
+                self._last_key.get(role.collection)
+                if self.rest_order == "selector"
+                else None
+            )
             key = _selector_key("pt", feats) if key is None else key
         else:
             key = _selector_key(role.selector, feats)
             self._last_key[role.collection] = key
         idx, valid = _take(key, present & ~taken, role.n)
         rows = np.arange(len(present))[:, None]
-        for j in range(role.n):                                  # mark the chosen members as consumed
+        for j in range(role.n):  # mark the chosen members as consumed
             taken[rows[:, 0], idx[:, j]] |= valid[:, j]
         return self._stack(coll, feats, idx, valid)
 
     @staticmethod
-    def _stack(coll: Collection, feats: dict[str, np.ndarray], idx: np.ndarray, valid: np.ndarray) -> torch.Tensor:
+    def _stack(
+        coll: Collection,
+        feats: dict[str, np.ndarray],
+        idx: np.ndarray,
+        valid: np.ndarray,
+    ) -> torch.Tensor:
         """(N, len(features) + 1, n): features in configuration order, presence flag last, padding -1."""
         n, slots = idx.shape
         rows = np.arange(n)[:, None]
@@ -178,11 +234,17 @@ class H5Dataset(Dataset):
             kind, where = event_source(self.spec, name)
             if kind == "computed":
                 feats, present = collections[where]
-                out[:, i] = present.sum(1) if name == "nSelJets" else (feats["pt"] * present).sum(1)
+                out[:, i] = (
+                    present.sum(1)
+                    if name == "nSelJets"
+                    else (feats["pt"] * present).sum(1)
+                )
             elif where in f:
                 out[:, i] = f[where][...].astype(np.float32)
             else:
-                raise KeyError(f"event scalar {name!r}: no {where} in {self.path.name} and it is not computable")
+                raise KeyError(
+                    f"event scalar {name!r}: no {where} in {self.path.name} and it is not computable"
+                )
         return torch.from_numpy(out)
 
     def _labels(self, f: h5py.File, n: int) -> np.ndarray:
@@ -192,8 +254,10 @@ class H5Dataset(Dataset):
         lab = f[key][...].astype(np.int64)
         bad = np.unique(lab[(lab < 0) | (lab > len(self.spec.outputs))])
         if len(bad):
-            raise ValueError(f"{self.path.name}: labels {bad.tolist()} outside 0..{len(self.spec.outputs)} "
-                             f"({len(self.spec.outputs)} outputs: {[o.name for o in self.spec.outputs]})")
+            raise ValueError(
+                f"{self.path.name}: labels {bad.tolist()} outside 0..{len(self.spec.outputs)} "
+                f"({len(self.spec.outputs)} outputs: {[o.name for o in self.spec.outputs]})"
+            )
         return lab
 
     # ---------------------------------------------------------------- Dataset API
@@ -202,7 +266,11 @@ class H5Dataset(Dataset):
 
     def __getitem__(self, idx):
         # slices (ds[:512]) cannot go through torch.as_tensor; expand them to explicit indices
-        index = torch.arange(*idx.indices(len(self))) if isinstance(idx, slice) else torch.as_tensor(idx)
+        index = (
+            torch.arange(*idx.indices(len(self)))
+            if isinstance(idx, slice)
+            else torch.as_tensor(idx)
+        )
         return {
             "index": index,
             "inputs": {k: v[idx] for k, v in self.inputs.items()},
@@ -217,5 +285,16 @@ class H5Dataset(Dataset):
         return np.flatnonzero(~val), np.flatnonzero(val)
 
 
-__all__ = ["H5Dataset", "GROUP_ALIASES", "COMPUTED_EVENT", "LABEL_KEYS", "WEIGHT_KEY", "FOLD_KEY", "EVENT_KEY",
-           "group_candidates", "used_collections", "event_source", "resolve_group"]
+__all__ = [
+    "COMPUTED_EVENT",
+    "EVENT_KEY",
+    "FOLD_KEY",
+    "GROUP_ALIASES",
+    "LABEL_KEYS",
+    "WEIGHT_KEY",
+    "H5Dataset",
+    "event_source",
+    "group_candidates",
+    "resolve_group",
+    "used_collections",
+]
