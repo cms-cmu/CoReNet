@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Validation rules of corenet.models.config (docs/EventInfo.md)."""
 
 from __future__ import annotations

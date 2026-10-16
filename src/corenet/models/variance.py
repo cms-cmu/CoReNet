@@ -5,6 +5,7 @@ normalisation of the embedders before training."""
 from __future__ import annotations
 
 from collections import namedtuple
+from typing import ClassVar
 
 import torch
 
@@ -13,7 +14,7 @@ _VarianceData = namedtuple("_VarianceBase", ["sumw", "sumw2", "m1", "M2"])
 
 class TensorVariance:
     _t = torch.float32
-    _k = {"dim": 0, "keepdim": True, "dtype": _t}
+    _k: ClassVar[dict] = {"dim": 0, "keepdim": True, "dtype": _t}
 
     def __init__(self, data: torch.Tensor | None = None):
         self._raw = None if data is None else _VarianceData(*self.compute(data))
@@ -39,7 +40,7 @@ class TensorVariance:
     def variance_unbiased(self) -> torch.Tensor:
         return self.variance / (1 - self._raw.sumw2 / (self._raw.sumw * self._raw.sumw))
 
-    def __add__(self, other: "TensorVariance") -> "TensorVariance":
+    def __add__(self, other: TensorVariance) -> TensorVariance:
         if not isinstance(other, TensorVariance):
             return NotImplemented
         new = TensorVariance()

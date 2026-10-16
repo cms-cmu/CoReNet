@@ -40,9 +40,7 @@ def main(argv=None):
         keep = []
         for c in np.unique(label):
             idx = np.flatnonzero(label == c)
-            keep.append(
-                rng.choice(idx, size=int(round(frac * len(idx))), replace=False)
-            )
+            keep.append(rng.choice(idx, size=round(frac * len(idx)), replace=False))
         keep = np.sort(np.concatenate(keep))
 
         with h5py.File(args.output, "w") as dst:

@@ -145,7 +145,7 @@ def validation_metrics(
     w = np.clip(weights.numpy()[val_idx], 0, None)
     p = np.clip(probs[np.arange(len(label)), label], 1e-12, None)
     out = {
-        "val_events": int(len(label)),
+        "val_events": len(label),
         "val_loss": float(-(w * np.log(p)).sum() / max(w.sum(), 1e-12)),
     }
     if 0 < int((label == 1).sum()) < len(label):
@@ -280,8 +280,8 @@ def train_fold(
                     "config": str(args.config),
                     "classes": spec.classes,
                     "recipe": recipe,
-                    "n_train": int(len(train_idx)),
-                    "n_val": int(len(val_idx)),
+                    "n_train": len(train_idx),
+                    "n_val": len(val_idx),
                     "history": history,
                 },
                 indent=1,
@@ -419,8 +419,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _check_recipe(r: dict) -> None:
     """Types and ranges of the training-recipe options."""
-    is_int = lambda x: isinstance(x, int) and not isinstance(x, bool)  # noqa: E731
-    is_num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)  # noqa: E731
+
+    def is_int(x):
+        return isinstance(x, int) and not isinstance(x, bool)
+
+    def is_num(x):
+        return isinstance(x, (int, float)) and not isinstance(x, bool)
+
     rules = {
         "epochs": (lambda x: is_int(x) and x >= 1, "an integer >= 1"),
         "freeze_epoch": (lambda x: is_int(x) and x >= 0, "an integer >= 0"),

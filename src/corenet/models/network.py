@@ -27,13 +27,13 @@ from __future__ import annotations
 import math
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from .blocks import GhostBatchNorm1d, MinimalAttention, linear
 from .combinatorics import ResNetBlock, build_hypothesis_table
-from .fourvectors import NonLU, PxPyPzE, addFourVectors, diObjectMass
 from .config import KINEMATIC, ConfigError, NetworkSpec
+from .fourvectors import NonLU, PxPyPzE, addFourVectors, diObjectMass
 
 TAG_FEATURES = (
     "btag",
@@ -908,4 +908,4 @@ class CoReNet(nn.Module):
                 m.setGhostBatches(nGhostBatches)
 
 
-__all__ = ["CoReNet", "calcDeltaPhi", "matrixMdPhi", "matrixMdRdPhi", "log_kinematics"]
+__all__ = ["CoReNet", "calcDeltaPhi", "log_kinematics", "matrixMdPhi", "matrixMdRdPhi"]

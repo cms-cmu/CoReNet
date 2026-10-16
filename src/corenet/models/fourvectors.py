@@ -80,4 +80,4 @@ def NonLU(x):
     return x * torch.sigmoid(x)
 
 
-__all__ = ["PxPyPzE", "PtEtaPhiM", "addFourVectors", "diObjectMass", "NonLU"]
+__all__ = ["NonLU", "PtEtaPhiM", "PxPyPzE", "addFourVectors", "diObjectMass"]

@@ -8,13 +8,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from synthetic import write_synthetic
 
 from corenet import export
 from corenet.checkpoint import load_checkpoint, save_checkpoint
 from corenet.data import H5Dataset
-from corenet.models.config import read_config_dict, parse_config
+from corenet.models.config import parse_config, read_config_dict
 from corenet.models.network import CoReNet
-from synthetic import write_synthetic
 
 repo = Path(__file__).resolve().parent.parent
 
@@ -60,7 +60,7 @@ def test_export(tmp_path, topology):
     )
     # the TorchScript file needs neither corenet nor the configuration
     ts = torch.jit.load(str(tmp_path / "export" / "model.pt"))
-    names = list(model.leaf_order) + ["event"]
+    names = [*model.leaf_order, "event"]
     x = tuple(ds.inputs[k][:7] for k in names)
     with torch.no_grad():
         probs = ts(*x)[0]

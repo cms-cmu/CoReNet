@@ -13,8 +13,8 @@ Tensors are laid out ``(batch, features, pixels)``.
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from .fourvectors import NonLU
 from .variance import TensorVariance
@@ -68,7 +68,7 @@ class GhostBatchNorm1d(nn.Module):
                 self.features_out,
                 self.stride,
                 self.stride,
-                name="%s conv" % name,
+                name=f"{name} conv",
                 bias=bias,
                 phase_symmetric=phase_symmetric,
             )
@@ -448,4 +448,4 @@ class MinimalAttention(nn.Module):
         return q, q0, v_weights
 
 
-__all__ = ["GhostBatchNorm1d", "conv1d", "linear", "AttentionGate", "MinimalAttention"]
+__all__ = ["AttentionGate", "GhostBatchNorm1d", "MinimalAttention", "conv1d", "linear"]

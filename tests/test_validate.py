@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import copy
 from pathlib import Path
 
 import h5py
 import numpy as np
 import pytest
 import yaml
+from synthetic import write_synthetic
 
 from corenet import validate
-from synthetic import write_synthetic
 
 repo = Path(__file__).resolve().parent.parent
 HH4B, BBWW = repo / "examples/hh4b/hh4b.yaml", repo / "examples/bbww/bbww.yaml"

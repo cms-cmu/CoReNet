@@ -59,4 +59,4 @@ def load_checkpoint(
     return model, spec, ckpt
 
 
-__all__ = ["save_checkpoint", "load_checkpoint"]
+__all__ = ["load_checkpoint", "save_checkpoint"]

@@ -40,7 +40,6 @@ from torch.utils.data import Dataset
 
 from ..models.config import Collection, NetworkSpec, RoleSpec
 
-
 # collection name (lower case) -> group names accepted in INPUTS, in order of preference
 GROUP_ALIASES = {
     "jets": ("Jets", "Source"),
@@ -287,15 +286,15 @@ class H5Dataset(Dataset):
 
 
 __all__ = [
-    "H5Dataset",
-    "GROUP_ALIASES",
     "COMPUTED_EVENT",
+    "EVENT_KEY",
+    "FOLD_KEY",
+    "GROUP_ALIASES",
     "LABEL_KEYS",
     "WEIGHT_KEY",
-    "FOLD_KEY",
-    "EVENT_KEY",
-    "group_candidates",
-    "used_collections",
+    "H5Dataset",
     "event_source",
+    "group_candidates",
     "resolve_group",
+    "used_collections",
 ]

@@ -136,7 +136,7 @@ def compute_metrics(
     from sklearn.metrics import roc_auc_score, roc_curve
 
     w = None if weight is None else np.clip(weight, 0, None)
-    out = {"n_events": int(len(label)), "weighted": weight is not None, "auc": {}}
+    out = {"n_events": len(label), "weighted": weight is not None, "auc": {}}
 
     def auc(y, s):
         if y.all() or not y.any():

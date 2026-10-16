@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -42,16 +41,16 @@ if not REF:
 REF = Path(REF)
 sys.path.insert(0, str(REF / "src"))
 
-from hcr.data.h5_generic import H5GenericDataset as RefDataset  # noqa: E402
-from hcr.models import blocks as ref_blocks  # noqa: E402
-from hcr.models import combinatorics as ref_comb  # noqa: E402
-from hcr.models.config import parse_config as ref_parse  # noqa: E402
-from hcr.models.hcr_generic import HCRGeneric  # noqa: E402
+from hcr.data.h5_generic import H5GenericDataset as RefDataset
+from hcr.models import blocks as ref_blocks
+from hcr.models import combinatorics as ref_comb
+from hcr.models.config import parse_config as ref_parse
+from hcr.models.hcr_generic import HCRGeneric
 
-from corenet.data import H5Dataset  # noqa: E402
-from corenet.models import blocks, combinatorics  # noqa: E402
-from corenet.models.config import parse_config  # noqa: E402
-from corenet.models.network import CoReNet  # noqa: E402
+from corenet.data import H5Dataset
+from corenet.models import blocks, combinatorics
+from corenet.models.config import parse_config
+from corenet.models.network import CoReNet
 
 repo = Path(__file__).resolve().parents[2]
 TOPOLOGIES = {
@@ -328,7 +327,7 @@ def test_primitives_parity():
             if m is not None and kw.get("stride", 1) != 1:
                 continue
             ref, new = _pair(ref_blocks.GhostBatchNorm1d, blocks.GhostBatchNorm1d, kw)
-            _modes(ref, new, lambda mod: mod(x, m), f"GBN {kw}")
+            _modes(ref, new, lambda mod, m=m: mod(x, m), f"GBN {kw}")
     ref, new = _pair(
         ref_blocks.GhostBatchNorm1d,
         blocks.GhostBatchNorm1d,
@@ -363,7 +362,7 @@ def test_primitives_parity():
             _modes(
                 ref,
                 new,
-                lambda mod: mod(q, v, m, q.clone(), qv),
+                lambda mod, m=m: mod(q, v, m, q.clone(), qv),
                 f"MinimalAttention gate={gate} kv={kv}",
             )
         _modes(
@@ -411,6 +410,7 @@ def test_primitives_parity():
 def test_trainer_parity(topology, tmp_path):
     import h5py
     from hcr.train import train_generic as ref_train
+
     from corenet import train as new_train
 
     small = repo / f"examples/data/{topology}_small.h5"
@@ -440,8 +440,8 @@ def test_trainer_parity(topology, tmp_path):
             str(TOPOLOGIES[topology]["ref_config"]),
             "--output-dir",
             str(tmp_path / "ref"),
+            *args,
         ]
-        + args
     )
     new_train.main(
         [
@@ -449,8 +449,8 @@ def test_trainer_parity(topology, tmp_path):
             str(TOPOLOGIES[topology]["config"]),
             "--output-dir",
             str(tmp_path / "new"),
+            *args,
         ]
-        + args
     )
     r = torch.load(
         tmp_path / "ref/model_fold0.pkl", map_location="cpu", weights_only=False

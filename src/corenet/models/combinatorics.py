@@ -24,7 +24,7 @@ import itertools
 from dataclasses import dataclass, field
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from .blocks import GhostBatchNorm1d
 from .fourvectors import NonLU
@@ -153,7 +153,9 @@ def build_hypothesis_table(
             if c in roles:
                 continue
             aliases[c] = groups.setdefault(_signature(c, nodes, roles), c)
-    canon = lambda n: aliases.get(n, n)  # noqa: E731
+
+    def canon(n):
+        return aliases.get(n, n)
 
     # order: views in canonical order; each node's candidates by first appearance across the views
     ordered: dict[str, list[Entry]] = {}
@@ -298,7 +300,7 @@ class ResNetBlock(nn.Module):
                         d,
                         phase_symmetric=phase_symmetric,
                         conv=True,
-                        name="%sjet convolution" % prefix,
+                        name=f"{prefix}jet convolution",
                         device=device,
                     )
                 )
@@ -308,7 +310,7 @@ class ResNetBlock(nn.Module):
                     child_index,
                     phase_symmetric=phase_symmetric,
                     symmetric_pair=symmetric_pair,
-                    name="%sreinforce" % prefix,
+                    name=f"{prefix}reinforce",
                     device=device,
                 )
             )
@@ -340,11 +342,11 @@ class ResNetBlock(nn.Module):
 
 
 __all__ = [
-    "Role",
+    "HypothesisTable",
     "Node",
     "NodeTable",
-    "HypothesisTable",
-    "build_hypothesis_table",
     "ReinforceLayer",
     "ResNetBlock",
+    "Role",
+    "build_hypothesis_table",
 ]

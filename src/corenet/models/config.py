@@ -484,17 +484,17 @@ def load_config(path: str | Path) -> NetworkSpec:
 
 
 __all__ = [
-    "ConfigError",
-    "Collection",
-    "RoleSpec",
-    "HypothesisSpec",
+    "SECTIONS",
     "AttentionSpec",
-    "RelationSpec",
-    "OutputSpec",
-    "TrainingSpec",
+    "Collection",
+    "ConfigError",
+    "HypothesisSpec",
     "NetworkSpec",
+    "OutputSpec",
+    "RelationSpec",
+    "RoleSpec",
+    "TrainingSpec",
+    "load_config",
     "parse_config",
     "read_config_dict",
-    "load_config",
-    "SECTIONS",
 ]

@@ -29,8 +29,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from .checkpoint import load_checkpoint
 from .data.h5 import H5Dataset
@@ -175,9 +175,7 @@ def main(argv=None):
     meta = {
         "checkpoint": str(args.checkpoint),
         "classes": spec.classes,
-        "inputs": {
-            k: [None] + list(ds.inputs[k].shape[1:]) for k in wrapper.input_names
-        },
+        "inputs": {k: [None, *ds.inputs[k].shape[1:]] for k in wrapper.input_names},
         "outputs": wrapper.output_names,
         "files": {},
         "max_abs_diff": {},

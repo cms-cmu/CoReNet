@@ -17,11 +17,11 @@ from pathlib import Path
 import h5py
 import numpy as np
 import yaml
+from synthetic import write_synthetic
 
 from corenet import evaluate, train
 from corenet.models.config import ConfigError, load_config
 from corenet.models.network import CoReNet
-from synthetic import write_synthetic
 
 repo = Path(__file__).resolve().parent.parent
 HH4B = repo / "examples/hh4b/hh4b.yaml"

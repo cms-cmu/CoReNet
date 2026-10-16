@@ -7,9 +7,9 @@ __version__ = "0.1.0"
 
 __all__ = [
     "CoReNet",
-    "NetworkSpec",
     "ConfigError",
+    "NetworkSpec",
+    "__version__",
     "load_config",
     "parse_config",
-    "__version__",
 ]
