@@ -5,4 +5,11 @@ from .models.network import CoReNet
 
 __version__ = "0.1.0"
 
-__all__ = ["CoReNet", "NetworkSpec", "ConfigError", "load_config", "parse_config", "__version__"]
+__all__ = [
+    "CoReNet",
+    "NetworkSpec",
+    "ConfigError",
+    "load_config",
+    "parse_config",
+    "__version__",
+]

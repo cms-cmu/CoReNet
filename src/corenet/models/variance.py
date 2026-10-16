@@ -52,7 +52,11 @@ class TensorVariance:
             sumw2 = self._raw.sumw2 + other._raw.sumw2
             delta = other._raw.m1 - self._raw.m1
             m1 = self._raw.m1 + delta * other._raw.sumw / sumw
-            M2 = self._raw.M2 + other._raw.M2 + delta**2 * self._raw.sumw * other._raw.sumw / sumw
+            M2 = (
+                self._raw.M2
+                + other._raw.M2
+                + delta**2 * self._raw.sumw * other._raw.sumw / sumw
+            )
             new._raw = _VarianceData(sumw, sumw2, m1, M2)
         return new
 

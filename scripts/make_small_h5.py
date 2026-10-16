@@ -19,12 +19,16 @@ import numpy as np
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("input")
     p.add_argument("output")
     p.add_argument("--events", type=int, default=20000, help="number of events to keep")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--drop-attrs", nargs="*", default=[], help="file-level attributes not to copy")
+    p.add_argument(
+        "--drop-attrs", nargs="*", default=[], help="file-level attributes not to copy"
+    )
     args = p.parse_args(argv)
 
     with h5py.File(args.input, "r") as src:
@@ -36,7 +40,9 @@ def main(argv=None):
         keep = []
         for c in np.unique(label):
             idx = np.flatnonzero(label == c)
-            keep.append(rng.choice(idx, size=int(round(frac * len(idx))), replace=False))
+            keep.append(
+                rng.choice(idx, size=int(round(frac * len(idx))), replace=False)
+            )
         keep = np.sort(np.concatenate(keep))
 
         with h5py.File(args.output, "w") as dst:

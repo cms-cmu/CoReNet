@@ -1,10 +1,10 @@
 """Checkpoint format: a ``torch.save``-d dict
 
-    {"model":    state dict of CoReNet,
-     "config":   the configuration mapping the network was built from (so a checkpoint is self-contained),
-     "config_path": path of the configuration file at training time,
-     "classes":  ["rest", <outputs>...],
-     "metadata": {"fold", "epoch", "exclude_folds", "input", <training recipe>}}
+{"model":    state dict of CoReNet,
+ "config":   the configuration mapping the network was built from (so a checkpoint is self-contained),
+ "config_path": path of the configuration file at training time,
+ "classes":  ["rest", <outputs>...],
+ "metadata": {"fold", "epoch", "exclude_folds", "input", <training recipe>}}
 """
 
 from __future__ import annotations
@@ -17,14 +17,26 @@ from .models.config import NetworkSpec, parse_config, read_config_dict
 from .models.network import CoReNet
 
 
-def save_checkpoint(path, model: CoReNet, config: dict, config_path, metadata: dict) -> Path:
+def save_checkpoint(
+    path, model: CoReNet, config: dict, config_path, metadata: dict
+) -> Path:
     path = Path(path)
-    torch.save({"model": model.state_dict(), "config": config, "config_path": str(Path(config_path).resolve()),
-                "classes": model.spec.classes, "metadata": metadata}, path)
+    torch.save(
+        {
+            "model": model.state_dict(),
+            "config": config,
+            "config_path": str(Path(config_path).resolve()),
+            "classes": model.spec.classes,
+            "metadata": metadata,
+        },
+        path,
+    )
     return path
 
 
-def load_checkpoint(path, config=None, device="cpu") -> tuple[CoReNet, NetworkSpec, dict]:
+def load_checkpoint(
+    path, config=None, device="cpu"
+) -> tuple[CoReNet, NetworkSpec, dict]:
     """(model in eval mode, spec, raw checkpoint dict).
 
     The network is built from ``config`` (a path) when given, else from the configuration stored in the
@@ -36,7 +48,9 @@ def load_checkpoint(path, config=None, device="cpu") -> tuple[CoReNet, NetworkSp
     elif isinstance(ckpt.get("config"), dict):
         cfg = ckpt["config"]
     else:
-        raise ValueError(f"{path}: the checkpoint stores no configuration; pass the configuration file explicitly")
+        raise ValueError(
+            f"{path}: the checkpoint stores no configuration; pass the configuration file explicitly"
+        )
     spec = parse_config(cfg)
     model = CoReNet(spec, device=str(device)).to(device)
     model.load_state_dict(ckpt["model"], strict=True)

@@ -42,7 +42,9 @@ def PtEtaPhiM(v):
     e = v[:, 3:4]
     Pt = (px**2 + py**2).sqrt()
     ysign = py.sign()
-    ysign = ysign + (ysign == 0.0).float()  # py == 0: protect the sign so that phi = acos(+-1)
+    ysign = (
+        ysign + (ysign == 0.0).float()
+    )  # py == 0: protect the sign so that phi = acos(+-1)
     Phi = (px / (Pt + 0.00001)).acos() * ysign
     Eta = asinh(pz / (Pt + 0.00001))
     M = F.relu(e**2 - px**2 - py**2 - pz**2).sqrt()
@@ -65,7 +67,10 @@ def diObjectMass(v1PxPyPzE, v2PxPyPzE):
     v12PxPyPzE = v1PxPyPzE + v2PxPyPzE
     # rounding can make the argument slightly negative: clip at zero before the square root
     M = F.relu(
-        v12PxPyPzE[:, 3:4] ** 2 - v12PxPyPzE[:, 0:1] ** 2 - v12PxPyPzE[:, 1:2] ** 2 - v12PxPyPzE[:, 2:3] ** 2
+        v12PxPyPzE[:, 3:4] ** 2
+        - v12PxPyPzE[:, 0:1] ** 2
+        - v12PxPyPzE[:, 1:2] ** 2
+        - v12PxPyPzE[:, 2:3] ** 2
     ).sqrt()
     return M
 

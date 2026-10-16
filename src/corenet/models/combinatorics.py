@@ -34,6 +34,7 @@ from .fourvectors import NonLU
 @dataclass(frozen=True)
 class Role:
     """A fixed number of slots taken from an input collection (``b: jets btag 4`` -> Role('b', 4))."""
+
     name: str
     n: int
 
@@ -41,6 +42,7 @@ class Role:
 @dataclass
 class Node:
     """A composite: ``children`` are role names or node names; its four-vector is their sum."""
+
     name: str
     children: list[str]
 
@@ -60,10 +62,12 @@ def _signature(name: str, nodes: dict[str, Node], roles: dict[str, Role]) -> tup
 @dataclass
 class NodeTable:
     name: str
-    candidates: list[Assignment]                         # ordered
-    children: list[str]                                  # (canonical) child names in declaration order
-    child_index: torch.Tensor | None = None              # (P, k) long: candidate index in each child's table
-    symmetric_children: bool = False                     # children interchangeable (same signature)
+    candidates: list[Assignment]  # ordered
+    children: list[str]  # (canonical) child names in declaration order
+    child_index: torch.Tensor | None = (
+        None  # (P, k) long: candidate index in each child's table
+    )
+    symmetric_children: bool = False  # children interchangeable (same signature)
 
     @property
     def n(self) -> int:
@@ -73,10 +77,14 @@ class NodeTable:
 @dataclass
 class HypothesisTable:
     top: str
-    nodes: dict[str, NodeTable]                          # keyed by canonical node name
-    views: list[tuple]                                   # per view: the children assignments of the top node
-    view_index: torch.Tensor = field(default=None)       # (V,) long: index into nodes[top].candidates
-    aliases: dict[str, str] = field(default_factory=dict)  # declared name -> canonical name (H2 -> H1)
+    nodes: dict[str, NodeTable]  # keyed by canonical node name
+    views: list[tuple]  # per view: the children assignments of the top node
+    view_index: torch.Tensor = field(
+        default=None
+    )  # (V,) long: index into nodes[top].candidates
+    aliases: dict[str, str] = field(
+        default_factory=dict
+    )  # declared name -> canonical name (H2 -> H1)
 
     def __getitem__(self, name: str) -> NodeTable:
         return self.nodes[name]
@@ -95,7 +103,9 @@ def _exclusive(assignments) -> bool:
     return len(used) == len(set(used))
 
 
-def _enumerate(name: str, nodes: dict[str, Node], roles: dict[str, Role], cache: dict) -> list[Entry]:
+def _enumerate(
+    name: str, nodes: dict[str, Node], roles: dict[str, Role], cache: dict
+) -> list[Entry]:
     """All candidates of ``name`` as entries ``(assignment, children_entries)`` in canonical
     lexicographic order. A role slot may be used at most once within a candidate (exclusivity).
     Two candidates are distinct when their child structure differs, even if they use the same slots."""
@@ -109,19 +119,28 @@ def _enumerate(name: str, nodes: dict[str, Node], roles: dict[str, Role], cache:
     child_lists = [_enumerate(c, nodes, roles, cache) for c in node.children]
     sigs = [_signature(c, nodes, roles) for c in node.children]
     symmetric = len(node.children) >= 2 and all(s == sigs[0] for s in sigs)
-    if symmetric:  # interchangeable children: unordered selection of distinct child candidates
+    if (
+        symmetric
+    ):  # interchangeable children: unordered selection of distinct child candidates
         pool = child_lists[0]
-        combos = [tuple(pool[i] for i in idx) for idx in itertools.combinations(range(len(pool)), len(node.children))]
+        combos = [
+            tuple(pool[i] for i in idx)
+            for idx in itertools.combinations(range(len(pool)), len(node.children))
+        ]
     else:
         combos = list(itertools.product(*child_lists))
-    combos = [c for c in combos if _exclusive(e[0] for e in c)]  # a slot is used once per candidate
+    combos = [
+        c for c in combos if _exclusive(e[0] for e in c)
+    ]  # a slot is used once per candidate
     out = [(_merge(e[0] for e in combo), combo) for combo in combos]
     out.sort(key=lambda entry: (entry[0], entry[1]))
     cache[name] = out
     return out
 
 
-def build_hypothesis_table(top: str, nodes: dict[str, Node], roles: dict[str, Role]) -> HypothesisTable:
+def build_hypothesis_table(
+    top: str, nodes: dict[str, Node], roles: dict[str, Role]
+) -> HypothesisTable:
     """Enumerate the views of ``top`` and derive every node's ordered candidate list and child_index."""
     cache: dict = {}
     top_entries = _enumerate(top, nodes, roles, cache)
@@ -164,11 +183,17 @@ def build_hypothesis_table(top: str, nodes: dict[str, Node], roles: dict[str, Ro
         children = [canon(c) for c in node.children]
         # child_index: row p = candidate p of this node, column j = the index of its j-th child's candidate in that child's table
         idx = torch.tensor(
-            [[ordered[c].index(sub) for c, sub in zip(children, entry[1])] for entry in entries], dtype=torch.long
+            [
+                [ordered[c].index(sub) for c, sub in zip(children, entry[1])]
+                for entry in entries
+            ],
+            dtype=torch.long,
         )
         tables[name] = NodeTable(name, cands, children, idx, sym)
 
-    view_index = torch.tensor([ordered[top].index(entry) for entry in top_entries], dtype=torch.long)
+    view_index = torch.tensor(
+        [ordered[top].index(entry) for entry in top_entries], dtype=torch.long
+    )
     views = [tuple(e[0] for e in entry[1]) for entry in top_entries]
     return HypothesisTable(top, tables, views, view_index, aliases)
 
@@ -185,16 +210,30 @@ class ReinforceLayer(nn.Module):
     children, so the update is invariant under exchanging them.
     """
 
-    def __init__(self, d, child_index, phase_symmetric=False, symmetric_pair=False, name="reinforce", device=None):
+    def __init__(
+        self,
+        d,
+        child_index,
+        phase_symmetric=False,
+        symmetric_pair=False,
+        name="reinforce",
+        device=None,
+    ):
         super().__init__()
         self.d = d
         self.name = name
         self.device = device
-        idx = torch.as_tensor(child_index, dtype=torch.long) if child_index is not None else torch.zeros(1, 0, dtype=torch.long)
+        idx = (
+            torch.as_tensor(child_index, dtype=torch.long)
+            if child_index is not None
+            else torch.zeros(1, 0, dtype=torch.long)
+        )
         if idx.dim() == 1:
             idx = idx.view(-1, 1)
-        self.register_buffer("child_index", idx, persistent=False)  # not a weight: keep out of the state_dict
-        self.k = int(idx.shape[1])                                   # children (decay products) per parent candidate
+        self.register_buffer(
+            "child_index", idx, persistent=False
+        )  # not a weight: keep out of the state_dict
+        self.k = int(idx.shape[1])  # children (decay products) per parent candidate
         self.symmetric_pair = symmetric_pair
         if symmetric_pair:
             assert self.k == 2, "symmetric_pair needs exactly two children"
@@ -205,19 +244,29 @@ class ReinforceLayer(nn.Module):
             self.antisym.weight.data.fill_(0.5)
             self.antisym.weight.data[:, :, 1] *= -1
             self.antisym.weight.requires_grad = False
-        self.conv = GhostBatchNorm1d(d, phase_symmetric=phase_symmetric, stride=self.k + 1, conv=True, name=name,
-                                     device=device)
+        self.conv = GhostBatchNorm1d(
+            d,
+            phase_symmetric=phase_symmetric,
+            stride=self.k + 1,
+            conv=True,
+            name=name,
+            device=device,
+        )
 
     def forward(self, x, xx):
-        bs, d, P = xx.shape                                           # batch, pixel width, number of parent candidates
+        bs, d, P = xx.shape  # batch, pixel width, number of parent candidates
         if self.k == 0:
             return self.conv(xx)
-        gathered = x[:, :, self.child_index.reshape(-1)].view(bs, d, P, self.k)  # (bs, d, P, k)
+        gathered = x[:, :, self.child_index.reshape(-1)].view(
+            bs, d, P, self.k
+        )  # (bs, d, P, k)
         if self.symmetric_pair:
             pair = gathered.reshape(bs, d, P * 2)
-            s, a = self.sym(pair), self.antisym(pair).abs()                        # (bs, d, P) each
-            gathered = torch.stack([s, a], dim=3)                                   # (bs, d, P, 2)
-        merged = torch.cat([gathered, xx.unsqueeze(3)], dim=3).reshape(bs, d, P * (self.k + 1))
+            s, a = self.sym(pair), self.antisym(pair).abs()  # (bs, d, P) each
+            gathered = torch.stack([s, a], dim=3)  # (bs, d, P, 2)
+        merged = torch.cat([gathered, xx.unsqueeze(3)], dim=3).reshape(
+            bs, d, P * (self.k + 1)
+        )
         return self.conv(merged)
 
 
@@ -226,8 +275,17 @@ class ResNetBlock(nn.Module):
     convolutions refining ``x`` in between and residuals ``x0`` / ``xx0``. With ``xx0Update=False``
     (top node) only the updated parent pixels are returned, otherwise also their new residual."""
 
-    def __init__(self, d, child_index, phase_symmetric=True, symmetric_pair=False, device="cuda", prefix="",
-                 nLayers=2, xx0Update=True):
+    def __init__(
+        self,
+        d,
+        child_index,
+        phase_symmetric=True,
+        symmetric_pair=False,
+        device="cuda",
+        prefix="",
+        nLayers=2,
+        xx0Update=True,
+    ):
         super().__init__()
         self.d = d
         self.device = device
@@ -235,10 +293,25 @@ class ResNetBlock(nn.Module):
         reinforce, conv = [], []
         for i in range(1, nLayers + 1):
             if i != nLayers:  # the final x update is never used
-                conv.append(GhostBatchNorm1d(d, phase_symmetric=phase_symmetric, conv=True,
-                                             name="%sjet convolution" % prefix, device=device))
-            reinforce.append(ReinforceLayer(d, child_index, phase_symmetric=phase_symmetric,
-                                            symmetric_pair=symmetric_pair, name="%sreinforce" % prefix, device=device))
+                conv.append(
+                    GhostBatchNorm1d(
+                        d,
+                        phase_symmetric=phase_symmetric,
+                        conv=True,
+                        name="%sjet convolution" % prefix,
+                        device=device,
+                    )
+                )
+            reinforce.append(
+                ReinforceLayer(
+                    d,
+                    child_index,
+                    phase_symmetric=phase_symmetric,
+                    symmetric_pair=symmetric_pair,
+                    name="%sreinforce" % prefix,
+                    device=device,
+                )
+            )
         self.reinforce = nn.ModuleList(reinforce)
         self.conv = nn.ModuleList(conv)
 
@@ -266,4 +339,12 @@ class ResNetBlock(nn.Module):
         return NonLU(xx)
 
 
-__all__ = ["Role", "Node", "NodeTable", "HypothesisTable", "build_hypothesis_table", "ReinforceLayer", "ResNetBlock"]
+__all__ = [
+    "Role",
+    "Node",
+    "NodeTable",
+    "HypothesisTable",
+    "build_hypothesis_table",
+    "ReinforceLayer",
+    "ResNetBlock",
+]
