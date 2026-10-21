@@ -7,7 +7,7 @@ Parse and validate a CoReNet configuration (YAML or JSON; grammar in docs/EventI
 The file grammar::
 
     objects:     jets: {features: [pt, eta, phi, mass], max: 12}         # collection: features = network inputs
-                 b: jets btag 4                                          # role: <collection> <selector> <n>
+                 b: jets btag 4                                          # role: <collection> <column> <n> [lowest]
     event:       [nSelJets, HT]
     hypotheses:  HH: {H1: [b, b], H2: [b, b], context: other}
                  tt: {t_had: [b, W_had], t_lep: [b, W_lep]}               # W_had / W_lep reused by name
@@ -32,21 +32,9 @@ from pathlib import Path
 from .combinatorics import Node, Role
 
 KINEMATIC = ("pt", "eta", "phi", "mass")
-SELECTORS = ("btag", "pt", "rest")
-# columns a selector reads from the input file, for the selection only (``rest`` orders by pT, or by the
-# previous selector's key); they need not be features
-SELECTOR_COLUMNS = {"btag": ("btag", "pt"), "pt": ("pt",), "rest": ("pt",)}
-SECTIONS = (
-    "objects",
-    "event",
-    "hypotheses",
-    "attention",
-    "relations",
-    "outputs",
-    "combine",
-    "training",
-    "trainer",
-)
+REST = "rest"            # the only reserved selector word: the members no earlier role took
+LOWEST = "lowest"        # trailing word of a role line: lowest value of the column first
+SECTIONS = ("objects", "event", "min_jets", "hypotheses", "attention", "relations", "outputs", "combine", "training", "trainer")
 
 
 class ConfigError(ValueError):
@@ -64,8 +52,15 @@ class Collection:
 class RoleSpec:
     name: str
     collection: str
-    selector: str  # btag | pt | rest
+    selector: str          # a column of the collection's group in the file (btag, pt, mass, ...) or ``rest``
     n: int
+    ascending: bool = False   # ``lowest``: the n members with the lowest value first (default: highest first)
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        """Columns the selector reads from the file, for the selection only: the column and pt (the tie
+        breaker; ``rest`` orders by pt or continues the previous role's order)."""
+        return ("pt",) if self.selector in (REST, "pt") else (self.selector, "pt")
 
 
 @dataclass
@@ -119,9 +114,8 @@ class NetworkSpec:
     combine: list[str]
     training: TrainingSpec
     relations: list[RelationSpec] = field(default_factory=list)
-    owner: dict[str, str] = field(
-        default_factory=dict
-    )  # node -> hypothesis in which it is declared
+    owner: dict[str, str] = field(default_factory=dict)   # node -> hypothesis in which it is declared
+    min_jets: int = 4                    # minimum jet multiplicity of the selection: nSelJets enters as log(nSelJets - (min_jets - 1))
 
     # ---- derived
     @property
@@ -153,7 +147,7 @@ class NetworkSpec:
         out: list[str] = []
         for r in self.roles.values():
             if r.collection == collection:
-                out.extend(c for c in SELECTOR_COLUMNS[r.selector] if c not in out)
+                out.extend(c for c in r.columns if c not in out)
         return out
 
     def columns_to_read(self, collection: str) -> list[str]:
@@ -234,23 +228,20 @@ def _check_training(tr: dict) -> None:
 
 
 def _parse_role(name: str, text: str, collections: dict[str, Collection]) -> RoleSpec:
-    m = re.fullmatch(r"\s*(\w+)\s+(\w+)\s+(\d+)\s*", text)
+    """``<collection> <column> <n>``: the n members with the highest value of ``column`` (ties: highest pt);
+    ``<collection> <column> <n> lowest``: the lowest first; ``<collection> rest <n>``: the members no earlier
+    role took. ``column`` is any per-member dataset of the collection's group in the file."""
+    m = re.fullmatch(rf"\s*(\w+)\s+(\w+)\s+(\d+)(?:\s+({LOWEST}))?\s*", text)
     if not m:
-        raise ConfigError(
-            f"objects.{name}: expected '<collection> <selector> <n>', got {text!r}"
-        )
-    coll, sel, n = m.group(1), m.group(2), int(m.group(3))
+        raise ConfigError(f"objects.{name}: expected '<collection> <column> <n> [{LOWEST}]', got {text!r}")
+    coll, sel, n, tail = m.group(1), m.group(2), int(m.group(3)), m.group(4)
     if coll not in collections:
         raise ConfigError(f"objects.{name}: unknown collection {coll!r}")
-    if sel not in SELECTORS:
-        raise ConfigError(
-            f"objects.{name}: selector must be one of {SELECTORS}, got {sel!r}"
-        )
+    if sel == REST and tail is not None:
+        raise ConfigError(f"objects.{name}: '{REST}' takes no {LOWEST!r} (its order is the rest_order option)")
     if n < 1 or n > collections[coll].max:
-        raise ConfigError(
-            f"objects.{name}: n={n} must be within 1..max={collections[coll].max} of {coll}"
-        )
-    return RoleSpec(name, coll, sel, n)
+        raise ConfigError(f"objects.{name}: n={n} must be within 1..max={collections[coll].max} of {coll}")
+    return RoleSpec(name, coll, sel, n, ascending=tail == LOWEST)
 
 
 def _parse_tree(
@@ -343,6 +334,9 @@ def parse_config(cfg: dict) -> NetworkSpec:
             )
 
     event = _str_list(cfg.get("event", []) or [], "event")
+    min_jets = cfg.get("min_jets", 4)
+    if isinstance(min_jets, bool) or not isinstance(min_jets, int) or min_jets < 2:
+        raise ConfigError(f"min_jets must be an integer >= 2 (the minimum jet multiplicity of the selection), got {min_jets!r}")
 
     # hypotheses ---------------------------------------------------------------------------
     leaves = set(roles) | {c.name for c in collections.values() if c.max == 1}
@@ -466,19 +460,7 @@ def parse_config(cfg: dict) -> NetworkSpec:
         if h not in [o.name for o in outputs[1:]]:
             raise ConfigError(f"training.head_weights: {h!r} is not a secondary output")
 
-    return NetworkSpec(
-        collections,
-        roles,
-        event,
-        nodes,
-        hypotheses,
-        attention,
-        outputs,
-        combine,
-        training,
-        relations,
-        owner,
-    )
+    return NetworkSpec(collections, roles, event, nodes, hypotheses, attention, outputs, combine, training, relations, owner, min_jets)
 
 
 def read_config_dict(path: str | Path) -> dict:
@@ -496,21 +478,6 @@ def load_config(path: str | Path) -> NetworkSpec:
     return parse_config(read_config_dict(path))
 
 
-__all__ = [
-    "KINEMATIC",
-    "SECTIONS",
-    "SELECTOR_COLUMNS",
-    "SELECTORS",
-    "AttentionSpec",
-    "Collection",
-    "ConfigError",
-    "HypothesisSpec",
-    "NetworkSpec",
-    "OutputSpec",
-    "RelationSpec",
-    "RoleSpec",
-    "TrainingSpec",
-    "load_config",
-    "parse_config",
-    "read_config_dict",
-]
+__all__ = ["ConfigError", "Collection", "RoleSpec", "HypothesisSpec", "AttentionSpec", "RelationSpec", "OutputSpec",
+           "TrainingSpec", "NetworkSpec", "parse_config", "read_config_dict", "load_config", "SECTIONS", "REST",
+           "LOWEST", "KINEMATIC"]
