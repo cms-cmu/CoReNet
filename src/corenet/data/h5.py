@@ -11,7 +11,9 @@ One loader serves every topology: it reads the collections named in the configur
     inputs["event"]   (N, len(spec.event))                  event scalars in the configured order
 
 plus ``labels`` (``EVENT/label``, or ``CLASSIFICATIONS/EVENT/signal`` when absent), ``weights``
-(``EVENT/weight``), ``folds`` (``EVENT/fold``) and ``events`` (``EVENT/event``). No generator-level
+(``EVENT/weight``), ``folds`` and ``events`` (``EVENT/event``). The cross-validation fold of an event
+is ``EVENT/fold`` by default; with ``n_folds`` it is ``fold_of(event, n_folds)`` = ``event % n_folds``
+computed from the event numbers, and the file needs no ``EVENT/fold`` column. No generator-level
 information is read: the roles are chosen from reconstructed quantities only.
 
 A collection's ``features`` are exactly the channels of its tensors. A selector reads the column it
@@ -37,6 +39,7 @@ present members and scalar sum of their pT); every other event scalar is read fr
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import h5py
@@ -54,8 +57,33 @@ GROUP_ALIASES = {
     "met": ("Met", "MET"),
 }
 COMPUTED_EVENT = ("nSelJets", "HT")
-LABEL_KEYS = ("EVENT/label", "CLASSIFICATIONS/EVENT/signal")   # first one present is used
+LABEL_KEYS = (
+    "EVENT/label",
+    "CLASSIFICATIONS/EVENT/signal",
+)  # first one present is used
 WEIGHT_KEY, FOLD_KEY, EVENT_KEY = "EVENT/weight", "EVENT/fold", "EVENT/event"
+FOLD_RULE_EVENT, FOLD_RULE_COLUMN = (
+    "event % n_folds",
+    "EVENT/fold",
+)  # H5Dataset.fold_rule
+
+
+def fold_of(event: np.ndarray, n_folds: int) -> np.ndarray:
+    """The fold rule: fold = event % n_folds on the (non-negative, int64) event numbers."""
+    if not isinstance(n_folds, int) or isinstance(n_folds, bool) or n_folds < 1:
+        raise ValueError(f"n_folds must be an integer >= 1, got {n_folds!r}")
+    event = np.asarray(event)
+    if event.dtype.kind not in "iu":
+        raise ValueError(
+            f"event numbers must be integers to compute fold = event % n_folds, got dtype {event.dtype}"
+        )
+    event = event.astype(np.int64)
+    if (event < 0).any():
+        raise ValueError(
+            f"{int((event < 0).sum()):,} event numbers are negative (or exceed int64): "
+            "fold = event % n_folds needs event numbers >= 0"
+        )
+    return event % n_folds
 
 
 # ------------------------------------------------------------------ what the loader reads (shared with corenet-validate)
@@ -99,14 +127,18 @@ def resolve_group(f: h5py.File, name: str) -> str:
     )
 
 
-def _read_collection(f: h5py.File, coll: Collection, columns: list[str]) -> tuple[dict[str, np.ndarray], np.ndarray]:
+def _read_collection(
+    f: h5py.File, coll: Collection, columns: list[str]
+) -> tuple[dict[str, np.ndarray], np.ndarray]:
     """(columns, present) of one collection, both shaped (N, slots in the file); ``columns`` are the
     features plus the selector columns (``columns_to_read``)."""
     group = f["INPUTS"][resolve_group(f, coll.name)]
     missing = [k for k in columns if k not in group]
     if missing:
-        raise KeyError(f"collection {coll.name!r} (INPUTS/{group.name.split('/')[-1]}): missing columns {missing} "
-                       f"(features {coll.features}, selector columns {[c for c in columns if c not in coll.features]})")
+        raise KeyError(
+            f"collection {coll.name!r} (INPUTS/{group.name.split('/')[-1]}): missing columns {missing} "
+            f"(features {coll.features}, selector columns {[c for c in columns if c not in coll.features]})"
+        )
     feats = {k: np.atleast_2d(group[k][...].astype(np.float32).T).T for k in columns}
     n, slots = feats[columns[0]].shape
     if coll.max > 1 and slots < coll.max:
@@ -121,34 +153,54 @@ def _read_collection(f: h5py.File, coll: Collection, columns: list[str]) -> tupl
     return feats, present
 
 
-def _selector_keys(role: RoleSpec, feats: dict[str, np.ndarray]) -> tuple[np.ndarray, ...]:
+def _selector_keys(
+    role: RoleSpec, feats: dict[str, np.ndarray]
+) -> tuple[np.ndarray, ...]:
     """Sort keys (smaller = preferred) of an explicit selector: the column, negated unless ``lowest``, then
     -pt as the tie breaker. A lexicographic sort, so the column's scale does not matter."""
     col = feats[role.selector]
     return (col if role.ascending else -col, -feats["pt"])
 
 
-def _take(keys: tuple[np.ndarray, ...], avail: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
+def _take(
+    keys: tuple[np.ndarray, ...], avail: np.ndarray, n: int
+) -> tuple[np.ndarray, np.ndarray]:
     """(indices, valid) of the n preferred available members: (N, n) each. Available members first, then
     by ``keys`` in order (the first key dominates), remaining ties in file order (stable)."""
-    order = np.lexsort((*reversed(keys), ~avail), axis=1)[:, :n]        # lexsort: the last key is the primary one
+    order = np.lexsort((*reversed(keys), ~avail), axis=1)[
+        :, :n
+    ]  # lexsort: the last key is the primary one
     rows = np.arange(len(avail))[:, None]
     return order, avail[rows, order]
 
 
 class H5Dataset(Dataset):
-    def __init__(self, path: str | Path, spec: NetworkSpec, rest_order: str = "pt"):
+    def __init__(
+        self,
+        path: str | Path,
+        spec: NetworkSpec,
+        rest_order: str = "pt",
+        n_folds: int | None = None,
+    ):
+        """``n_folds``: use fold = event % n_folds (``fold_of``) instead of the ``EVENT/fold`` column."""
         if rest_order not in ("pt", "selector"):
             raise ValueError(
                 f"rest_order must be 'pt' or 'selector', got {rest_order!r}"
             )
         self.spec, self.path, self.rest_order = spec, Path(path), rest_order
-        self._taken: dict[str, np.ndarray] = {}                  # per collection: members already consumed by a role
-        self._last_keys: dict[str, tuple[np.ndarray, ...]] = {}  # per collection: sort keys of the last explicit selector
+        self._taken: dict[
+            str, np.ndarray
+        ] = {}  # per collection: members already consumed by a role
+        self._last_keys: dict[
+            str, tuple[np.ndarray, ...]
+        ] = {}  # per collection: sort keys of the last explicit selector
         inputs: dict[str, torch.Tensor] = {}
 
         with h5py.File(path, "r") as f:
-            collections = {c.name: _read_collection(f, c, columns_to_read(spec, c)) for c in used_collections(spec)}
+            collections = {
+                c.name: _read_collection(f, c, columns_to_read(spec, c))
+                for c in used_collections(spec)
+            }
             for role in spec.roles.values():
                 feats, present = collections[role.collection]
                 inputs[role.name] = self._role_tensor(
@@ -169,17 +221,37 @@ class H5Dataset(Dataset):
                 if WEIGHT_KEY in f
                 else torch.ones(n, dtype=torch.float32)
             )
-            self.folds = (
-                torch.from_numpy(f[FOLD_KEY][...].astype(np.int64))
-                if FOLD_KEY in f
-                else torch.zeros(n, dtype=torch.int64)
-            )
             self.events = (
                 torch.from_numpy(f[EVENT_KEY][...].astype(np.int64))
                 if EVENT_KEY in f
                 else torch.arange(n, dtype=torch.int64)
             )
+            self.folds, self.n_folds, self.fold_rule = self._folds(f, n_folds)
         self.inputs = inputs
+
+    def _folds(
+        self, f: h5py.File, n_folds: int | None
+    ) -> tuple[torch.Tensor, int, str]:
+        """(fold of every event, number of folds, rule): ``EVENT/fold`` (n_folds = the number of distinct
+        values) or, with ``n_folds``, ``fold_of(EVENT/event, n_folds)``."""
+        if n_folds is not None:
+            if EVENT_KEY not in f:
+                raise KeyError(
+                    f"{self.path.name}: no {EVENT_KEY} dataset; fold = event % {n_folds} needs the event numbers"
+                )
+            if FOLD_KEY in f:
+                logging.info(
+                    f"{self.path.name}: {FOLD_KEY} ignored, folds = event % {n_folds} from {EVENT_KEY}"
+                )
+            folds = fold_of(f[EVENT_KEY][...], n_folds)
+            return torch.from_numpy(folds), n_folds, FOLD_RULE_EVENT
+        if FOLD_KEY not in f:
+            raise KeyError(
+                f"{self.path.name}: no {FOLD_KEY} dataset; pass --n-folds K (H5Dataset(n_folds=K)) "
+                f"to use fold = event % K from {EVENT_KEY}"
+            )
+        folds = f[FOLD_KEY][...].astype(np.int64)
+        return torch.from_numpy(folds), len(np.unique(folds)), FOLD_RULE_COLUMN
 
     # ---------------------------------------------------------------- construction
     def _role_tensor(
@@ -191,7 +263,11 @@ class H5Dataset(Dataset):
     ) -> torch.Tensor:
         taken = self._taken.setdefault(role.collection, np.zeros_like(present))
         if role.selector == REST:
-            keys = self._last_keys.get(role.collection) if self.rest_order == "selector" else None
+            keys = (
+                self._last_keys.get(role.collection)
+                if self.rest_order == "selector"
+                else None
+            )
             keys = (-feats["pt"],) if keys is None else keys
         else:
             keys = _selector_keys(role, feats)
@@ -203,7 +279,12 @@ class H5Dataset(Dataset):
         return self._stack(coll, feats, idx, valid)
 
     @staticmethod
-    def _stack(coll: Collection, feats: dict[str, np.ndarray], idx: np.ndarray, valid: np.ndarray) -> torch.Tensor:
+    def _stack(
+        coll: Collection,
+        feats: dict[str, np.ndarray],
+        idx: np.ndarray,
+        valid: np.ndarray,
+    ) -> torch.Tensor:
         """(N, len(features) + 1, n): features in configuration order, presence flag last, padding -1.
         Columns read only for a selector are not stacked."""
         n, slots = idx.shape
@@ -273,5 +354,20 @@ class H5Dataset(Dataset):
         return np.flatnonzero(~val), np.flatnonzero(val)
 
 
-__all__ = ["H5Dataset", "GROUP_ALIASES", "COMPUTED_EVENT", "LABEL_KEYS", "WEIGHT_KEY", "FOLD_KEY", "EVENT_KEY",
-           "group_candidates", "used_collections", "columns_to_read", "event_source", "resolve_group"]
+__all__ = [
+    "COMPUTED_EVENT",
+    "EVENT_KEY",
+    "FOLD_KEY",
+    "FOLD_RULE_COLUMN",
+    "FOLD_RULE_EVENT",
+    "GROUP_ALIASES",
+    "LABEL_KEYS",
+    "WEIGHT_KEY",
+    "H5Dataset",
+    "columns_to_read",
+    "event_source",
+    "fold_of",
+    "group_candidates",
+    "resolve_group",
+    "used_collections",
+]
