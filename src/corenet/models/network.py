@@ -36,7 +36,9 @@ from .combinatorics import ResNetBlock, build_hypothesis_table
 from .config import KINEMATIC, ConfigError, NetworkSpec
 from .fourvectors import NonLU, PxPyPzE, addFourVectors, diObjectMass
 
-MASKED_LOGIT = -1e4       # selector logit of an absent view (finite, so an all-absent event stays finite)
+MASKED_LOGIT = (
+    -1e4
+)  # selector logit of an absent view (finite, so an all-absent event stays finite)
 
 
 # ------------------------------------------------------------------------------- small helpers
@@ -400,7 +402,9 @@ class CoReNet(nn.Module):
 
     def _extras(self, role):
         feats = self.spec.collection_of(role).features
-        return [f for f in feats if f not in KINEMATIC]           # every non-kinematic feature is an input
+        return [
+            f for f in feats if f not in KINEMATIC
+        ]  # every non-kinematic feature is an input
 
     def _kinematic_channels(self, role):
         feats = self.spec.collection_of(role).features
@@ -462,8 +466,15 @@ class CoReNet(nn.Module):
             a = inputs["event"].view(n, self.dA, 1)
             for idx, name in enumerate(self.spec.event):
                 if "nSelJets" in name:
-                    a = torch.cat([a[:, :idx], torch.log(a[:, idx:idx + 1] - (self.spec.min_jets - 1)), a[:, idx + 1:]], dim=1)
-            a = finite(a)                                             # nSelJets < min_jets would give -inf / NaN
+                    a = torch.cat(
+                        [
+                            a[:, :idx],
+                            torch.log(a[:, idx : idx + 1] - (self.spec.min_jets - 1)),
+                            a[:, idx + 1 :],
+                        ],
+                        dim=1,
+                    )
+            a = finite(a)  # nSelJets < min_jets would give -inf / NaN
 
         out = {
             "n": n,
