@@ -26,7 +26,7 @@ Changing one of these gives a different network: validate the file with `corenet
 
 | key | flag | default | meaning |
 |---|---|---|---|
-| `epochs` | `--epochs` | 20 | number of epochs; the model after the last epoch is kept |
+| `epochs` | `--epochs` | 20 | number of epochs; the model after the last epoch is kept unless `early_stop_patience` is set |
 | `lr` | `--lr` | 0.01 | learning rate |
 | `lr_milestones` | `--lr-milestones` | 15, 16, ..., 24 | epochs after which the learning rate is multiplied by `lr_gamma` |
 | `lr_gamma` | `--lr-gamma` | 0.25 | learning-rate decay factor |
@@ -34,7 +34,8 @@ Changing one of these gives a different network: validate the file with `corenet
 | `freeze_epoch` | `--freeze-epoch` | 15 | from this epoch on only the output layers are trained (a value ≥ `epochs` disables this) |
 | `class_norm` | `--class-norm` / `--no-class-norm` | true | give every class the same total weight in training |
 | `seed` | `--seed` | 42 | random seed; fold `k` uses `seed + k` |
-| `rest_order` | `--rest-order` | `pt` | order of the jets taken by a `rest` line: `pt`, or `selector` to keep the order of the previous `btag`/`pt` line |
+| `early_stop_patience` | `--early-stop-patience` | 0 | stop when the validation AUC (on the `--exclude-folds` fold) has not improved for this many epochs, and keep the weights of the best epoch; 0 trains every epoch |
+| `rest_order` | `--rest-order` | `pt` | order of the jets taken by a `rest` line: `pt`, or `selector` to keep the order of the previous candidate line on the same collection (e.g. `b: jets btag 4`) |
 
 Write floating-point numbers with a decimal point (`0.005` or `5.0e-3`): YAML reads `5e-3` as a string,
 which the validation rejects.
@@ -51,7 +52,7 @@ These choices are part of the training procedure and the network and have no set
 * the batch size doubles at epochs 1, 3, 6 and 10, and the batches are split into 64, 16, 4, 1 and 0 ghost batches over those stages;
 * from `freeze_epoch` on, only the output layers keep training;
 * the input file needs no standardization of its values;
-* the event-level quantities `nSelJets` and `HT` are computed from the jets in the file.
+* the event-level quantities `nSelJets` and `HT` are computed from the jets in the file; `nSelJets` enters as `log(nSelJets - (min_jets - 1))` ([EventInfo.md](./EventInfo.md)).
 
 ## Choosing the jets
 

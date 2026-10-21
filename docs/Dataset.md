@@ -46,9 +46,9 @@ jets is decided by the event description when the file is loaded, so one file se
 
 The column names are the ones used in the event description. The columns listed as `features` there
 are the inputs of the network: `pt`, `eta`, `phi` and `mass` are the kinematics, any other feature
-(`isE`, `isM`, ...) is an additional input for that object. A column named in a candidate rule (`btag`
-for `b: jets btag 4`) is read for that choice only and need not be a feature; listing it under `features`
-would make it an input as well.
+(`isE`, `isM`, ...) is an additional input for that object. Any column of a collection can be named in a
+candidate line (`btag` for `b: jets btag 4`, [EventInfo.md](./EventInfo.md)); it is read for that choice
+only and need not be a feature; listing it under `features` would make it an input as well.
 
 ## Single objects
 

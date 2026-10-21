@@ -47,15 +47,18 @@ objects:
 
 A collection has `features` (required) and `max` (the number of jets per event, default 1). A
 single object enters the decay chains by its own name; a collection with several jets is used
-through candidate lines of the form `<name>: <collection> <rule> <n>`:
+through candidate lines of the form `<name>: <collection> <column> <n>`, where `<column>` is any
+per-jet column of the collection's group in the input file (`btag`, `pt`, `mass`, ...):
 
-| rule | the `n` jets taken |
+| line | the `n` jets taken |
 |---|---|
-| `btag` | the `n` jets most likely to be b jets; reads the `btag` (and `pt`) column of the file, which need not be a feature |
-| `pt` | the `n` leading jets; reads the `pt` column |
-| `rest` | up to `n` of the jets not taken by an earlier line |
+| `<column> <n>` | the `n` jets with the highest value of the column (`jets btag 4`: the four jets most likely to be b jets; `jets pt 4`: the four leading jets); ties go to the higher `pt` |
+| `<column> <n> lowest` | the `n` jets with the lowest value of the column (`jets mass 2 lowest`), ties again to the higher `pt` |
+| `rest <n>` | up to `n` of the jets not taken by an earlier line, leading `pt` first ([Options.md](./Options.md): `rest_order`) |
 
-A rule reads its column from the input file for the selection only; the network sees the `features`.
+`rest` is the only reserved word; every other word in that position names a column. The column (and
+`pt`) is read from the input file for the selection only and need not be a feature; the network sees
+the `features`. Nothing else may follow `<n>` but `lowest`.
 
 Lines are filled in order and a jet is used by at most one line. An event with fewer jets than needed
 is kept; the missing ones are simply absent.
@@ -68,6 +71,14 @@ event: [nSelJets, HT]
 
 Optional per-event quantities. `nSelJets` (the number of jets) and `HT` (their scalar momentum sum)
 are computed from the jet collection; any other name is read from the input file.
+
+```yaml
+min_jets: 4
+```
+
+Optional, default 4: the minimum number of jets per event in your selection. The jet multiplicity enters
+the network as `log(nSelJets - (min_jets - 1))`, so that the minimum multiplicity maps to zero; an event
+with fewer jets than `min_jets` would give a non-finite input.
 
 ## `hypotheses`
 
