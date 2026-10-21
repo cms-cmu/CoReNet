@@ -29,8 +29,8 @@ event description. Next to each key is the expected shape and data type.
 - EVENT
 ---- label        : [NUM_EVENTS, ]           : int      (or CLASSIFICATIONS/EVENT/signal)
 ---- weight       : [NUM_EVENTS, ]           : float    (optional)
----- fold         : [NUM_EVENTS, ]           : int      (needed for training)
----- event        : [NUM_EVENTS, ]           : int      (optional event identifier)
+---- fold         : [NUM_EVENTS, ]           : int      (optional: cross-validation fold; else --n-folds)
+---- event        : [NUM_EVENTS, ]           : int      (event number; needed with --n-folds)
 ---- other_scalar : [NUM_EVENTS, ]           : float    (any quantity named under `event:`)
 ```
 
@@ -67,9 +67,16 @@ A collection named `x` is read from `INPUTS/x`, matched case-insensitively, or f
   of the event description in order (`1` = signal in both examples).
 * **Weights.** `EVENT/weight` is the event weight (1 when absent). Each class is normalised during
   training, so only the relative weights within a class matter. Negative weights count as 0.
-* **Folds.** `EVENT/fold` is the cross-validation fold of the event. `corenet-train --fold k` holds
-  out fold `k` for testing and `--exclude-folds j` uses fold `j` for validation.
-* **Event identifier.** `EVENT/event` is copied to the prediction files.
+* **Folds.** The cross-validation fold of an event is `EVENT/fold` when the file has that column.
+  Without it, pass `--n-folds K` to `corenet-train` (and to `corenet-validate`): the fold is then
+  `event % K`, computed from the event numbers in `EVENT/event` (integers ≥ 0), and no random split
+  is ever made. With `--n-folds K` an existing `EVENT/fold` column is ignored. The rule used
+  (`EVENT/fold` or `event % n_folds`) and the number of folds are stored in the checkpoint, so
+  `corenet-evaluate` applies the same rule to any file. `corenet-train --fold k` holds out fold `k`
+  for testing and `--exclude-folds j` uses fold `j` for validation (`--exclude-folds next`: fold
+  `(k + 1) % n_folds`).
+* **Event identifier.** `EVENT/event` is copied to the prediction files and is the input of the
+  `event % n_folds` rule.
 
 ## Example
 
@@ -84,8 +91,11 @@ follow this layout:
   `EVENT/event`.
 
 They are random subsamples of the full files `hh4b_all.h5` and `bbww_all.h5`, written with
-`python scripts/make_small_h5.py <full> <small> --events 20000`. Check any file against an event
-description with
+`python scripts/make_small_h5.py <full> <small> --events 20000`. The `EVENT/fold` column of the
+example files was assigned from a hash of the event number when the files were produced and is not
+`event % 5`: to reproduce the folds of the paper, train and evaluate on these files without
+`--n-folds`. `corenet-validate --n-folds 5` reports how many events the two rules assign differently.
+Check any file against an event description with
 
 ```bash
 corenet-validate --config examples/bbww/bbww.yaml --input examples/data/bbww_small.h5

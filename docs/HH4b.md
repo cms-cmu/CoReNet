@@ -122,12 +122,12 @@ In `--output-dir`:
 | `predictions_fold0.h5` | predictions on the held-out fold 0, in the layout of the evaluation below (without the ROC curve) |
 
 **All five folds.** `--fold -1` (the default) trains one model per fold in turn. To validate each
-fold on the next one, (k + 1) mod 5, run the folds one by one:
+fold on the next one, (k + 1) mod 5, run the folds one by one with `--exclude-folds next`:
 
 ```bash
 for k in 0 1 2 3 4; do
   corenet-train --config examples/hh4b/hh4b.yaml --input examples/data/hh4b_all.h5 \
-      --fold $k --exclude-folds $(( (k + 1) % 5 )) --device cuda --output-dir runs/hh4b_full
+      --fold $k --exclude-folds next --device cuda --output-dir runs/hh4b_full
 done
 ```
 
@@ -184,7 +184,7 @@ of the b jets has to be reproduced wherever the model is deployed; see Exporting
 | epochs, learning rate, decay | `--epochs`, `--lr`, `--lr-milestones`, `--lr-gamma`, `--freeze-epoch`, or the `trainer:` section | `--epochs 30 --lr-milestones 25 26 27 28 29 --freeze-epoch 25` |
 | batch size | `--batch-size-init` or `trainer: batch_size_init` | |
 | seed | `--seed` or `trainer: seed` | fold k uses seed + k |
-| validation / test folds | `--fold`, `--exclude-folds` | Training above |
+| validation / test folds | `--fold`, `--exclude-folds` (`next` = the fold after the held-out one), `--n-folds` (fold = `event % K` instead of `EVENT/fold`) | Training above |
 
 A change in `objects` or `training:` gives a different network: validate the new file with
 `corenet-validate` and retrain ([Options.md](./Options.md)).
