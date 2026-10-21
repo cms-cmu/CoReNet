@@ -6,7 +6,7 @@ Parse and validate a CoReNet configuration (YAML or JSON; grammar in docs/EventI
 
 The file grammar::
 
-    objects:     jets: {features: [pt, eta, phi, mass, btag], max: 12}   # collection
+    objects:     jets: {features: [pt, eta, phi, mass], max: 12}         # collection: features = network inputs
                  b: jets btag 4                                          # role: <collection> <selector> <n>
     event:       [nSelJets, HT]
     hypotheses:  HH: {H1: [b, b], H2: [b, b], context: other}
@@ -33,6 +33,9 @@ from .combinatorics import Node, Role
 
 KINEMATIC = ("pt", "eta", "phi", "mass")
 SELECTORS = ("btag", "pt", "rest")
+# columns a selector reads from the input file, for the selection only (``rest`` orders by pT, or by the
+# previous selector's key); they need not be features
+SELECTOR_COLUMNS = {"btag": ("btag", "pt"), "pt": ("pt",), "rest": ("pt",)}
 SECTIONS = (
     "objects",
     "event",
@@ -53,7 +56,7 @@ class ConfigError(ValueError):
 @dataclass
 class Collection:
     name: str
-    features: list[str]
+    features: list[str]    # exactly the columns fed to the network (kinematics + extras), in this order
     max: int = 1
 
 
@@ -145,6 +148,20 @@ class NetworkSpec:
             else self.collections[leaf]
         )
 
+    def selector_columns(self, collection: str) -> list[str]:
+        """Columns the selectors of the roles on ``collection`` read from the file (selection only)."""
+        out: list[str] = []
+        for r in self.roles.values():
+            if r.collection == collection:
+                out.extend(c for c in SELECTOR_COLUMNS[r.selector] if c not in out)
+        return out
+
+    def columns_to_read(self, collection: str) -> list[str]:
+        """Every column the loader reads for ``collection``: its features (the network inputs), then the
+        selector columns that are not features."""
+        feats = list(self.collections[collection].features)
+        return feats + [c for c in self.selector_columns(collection) if c not in feats]
+
     def nodes_in(self, hypothesis: str) -> set[str]:
         """Composite nodes reachable from a hypothesis' top node."""
         seen, stack = set(), [hypothesis]
@@ -228,10 +245,6 @@ def _parse_role(name: str, text: str, collections: dict[str, Collection]) -> Rol
     if sel not in SELECTORS:
         raise ConfigError(
             f"objects.{name}: selector must be one of {SELECTORS}, got {sel!r}"
-        )
-    if sel == "btag" and "btag" not in collections[coll].features:
-        raise ConfigError(
-            f"objects.{name}: selector 'btag' needs a 'btag' feature on {coll}"
         )
     if n < 1 or n > collections[coll].max:
         raise ConfigError(
@@ -484,7 +497,10 @@ def load_config(path: str | Path) -> NetworkSpec:
 
 
 __all__ = [
+    "KINEMATIC",
     "SECTIONS",
+    "SELECTOR_COLUMNS",
+    "SELECTORS",
     "AttentionSpec",
     "Collection",
     "ConfigError",

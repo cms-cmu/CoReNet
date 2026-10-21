@@ -91,9 +91,10 @@ combine: [HH]
 `jets` is the jet collection: `max: 12` is the number of jet slots read per event, and the input file must
 have at least that many. The listed `features` are the inputs of the network: these columns of the input
 file, and only these, are fed to it. \
-`jets btag 4` selects the four jets most likely to be b jets (alternatively `jets pt 4` would select the four
-leading jets). The `btag` selector reads the `btag` column of the file for this selection only; it need not be
-a feature, and a feature named `btag` would be one more network input. The input
+`jets btag 4` selects the four jets with the highest `btag` (alternatively `jets pt 4` would select the four
+leading jets): any column of the jets in the file can be used this way, and `jets mass 2 lowest` would take the
+two jets with the lowest value instead. The selector reads its column from the file for this selection only; it
+need not be a feature, and a feature named `btag` would be one more network input. The input
 file holds all jets of the event, and the b jets are chosen when it is loaded. For more details on specifying the event decay, check [docs/EventInfo.md](docs/EventInfo.md), and for the input file itself, check [docs/Dataset.md](docs/Dataset.md).
 
 The full-statistics files (454,261 HH → bb̄bb̄ events, 292,285 HH → bb̄WW events) are distributed
@@ -126,6 +127,7 @@ corenet-train --config examples/bbww/bbww.yaml --input examples/data/bbww_all.h5
 
 * `--fold 0`: hold out fold 0 for testing. With `--fold -1` (the default), train one model per fold in turn.
 * `--exclude-folds 1`: keep fold 1 out of the training and use it for validation.
+* `--early-stop-patience 5`: stop when the validation AUC has not improved for 5 epochs and keep the best epoch.
 * `--epochs`, `--lr`, `--seed`, ...: override the training settings of the configuration file.
   See [docs/Options.md](docs/Options.md) or `corenet-train --help`.
 
