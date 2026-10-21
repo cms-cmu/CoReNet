@@ -248,3 +248,33 @@ def test_train_and_evaluate() -> None:
     with tempfile.TemporaryDirectory(prefix="corenet_train_") as tmp:
         run_one(Path(tmp), "hh4b", HH4B, 1508, ["rest", "signal"])
         run_one(Path(tmp), "bbww", BBWW, 3832, ["rest", "signal", "ttbar"])
+
+
+def test_early_stopping() -> None:
+    """--early-stop-patience: stop after N epochs without a better validation AUC and keep the best epoch."""
+    import torch
+    with tempfile.TemporaryDirectory(prefix="corenet_es_") as tmp:
+        tmp = Path(tmp)
+        data = write_synthetic(tmp / "hh4b_all.h5", "hh4b")
+        out_dir = tmp / "m"
+        train.main(["--config", str(HH4B), "--input", str(data), "--output-dir", str(out_dir), "--fold", "0",
+                    "--exclude-folds", "1", "--epochs", "12", "--batch-size-init", "128", "--early-stop-patience", "1",
+                    "--device", "cpu"])
+        h = json.loads((out_dir / "history_fold0.json").read_text())
+        aucs = [e["val_auc"] for e in h["history"]]
+        best = max(range(len(aucs)), key=lambda i: aucs[i])
+        assert h["best_epoch"] == best and h["early_stop_patience"] == 1
+        if h["stopped_after_epoch"] is not None:                    # stopped: one non-improving epoch after the best
+            assert h["stopped_after_epoch"] == best + 1 and len(aucs) == best + 2
+        else:
+            assert len(aucs) == 12
+        ck = torch.load(out_dir / "model_fold0.pkl", map_location="cpu", weights_only=False)
+        assert ck["metadata"]["epoch"] == best and ck["metadata"]["early_stop_patience"] == 1
+        # without a validation fold the option is refused
+        try:
+            train.main(["--config", str(HH4B), "--input", str(data), "--output-dir", str(tmp / "n"), "--fold", "0",
+                        "--epochs", "2", "--early-stop-patience", "1", "--device", "cpu"])
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("expected an error without --exclude-folds")
