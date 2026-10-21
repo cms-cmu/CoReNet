@@ -32,9 +32,20 @@ from pathlib import Path
 from .combinatorics import Node, Role
 
 KINEMATIC = ("pt", "eta", "phi", "mass")
-REST = "rest"            # the only reserved selector word: the members no earlier role took
-LOWEST = "lowest"        # trailing word of a role line: lowest value of the column first
-SECTIONS = ("objects", "event", "min_jets", "hypotheses", "attention", "relations", "outputs", "combine", "training", "trainer")
+REST = "rest"  # the only reserved selector word: the members no earlier role took
+LOWEST = "lowest"  # trailing word of a role line: lowest value of the column first
+SECTIONS = (
+    "objects",
+    "event",
+    "min_jets",
+    "hypotheses",
+    "attention",
+    "relations",
+    "outputs",
+    "combine",
+    "training",
+    "trainer",
+)
 
 
 class ConfigError(ValueError):
@@ -44,7 +55,9 @@ class ConfigError(ValueError):
 @dataclass
 class Collection:
     name: str
-    features: list[str]    # exactly the columns fed to the network (kinematics + extras), in this order
+    features: list[
+        str
+    ]  # exactly the columns fed to the network (kinematics + extras), in this order
     max: int = 1
 
 
@@ -52,9 +65,9 @@ class Collection:
 class RoleSpec:
     name: str
     collection: str
-    selector: str          # a column of the collection's group in the file (btag, pt, mass, ...) or ``rest``
+    selector: str  # a column of the collection's group in the file (btag, pt, mass, ...) or ``rest``
     n: int
-    ascending: bool = False   # ``lowest``: the n members with the lowest value first (default: highest first)
+    ascending: bool = False  # ``lowest``: the n members with the lowest value first (default: highest first)
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -114,8 +127,10 @@ class NetworkSpec:
     combine: list[str]
     training: TrainingSpec
     relations: list[RelationSpec] = field(default_factory=list)
-    owner: dict[str, str] = field(default_factory=dict)   # node -> hypothesis in which it is declared
-    min_jets: int = 4                    # minimum jet multiplicity of the selection: nSelJets enters as log(nSelJets - (min_jets - 1))
+    owner: dict[str, str] = field(
+        default_factory=dict
+    )  # node -> hypothesis in which it is declared
+    min_jets: int = 4  # minimum jet multiplicity of the selection: nSelJets enters as log(nSelJets - (min_jets - 1))
 
     # ---- derived
     @property
@@ -233,14 +248,20 @@ def _parse_role(name: str, text: str, collections: dict[str, Collection]) -> Rol
     role took. ``column`` is any per-member dataset of the collection's group in the file."""
     m = re.fullmatch(rf"\s*(\w+)\s+(\w+)\s+(\d+)(?:\s+({LOWEST}))?\s*", text)
     if not m:
-        raise ConfigError(f"objects.{name}: expected '<collection> <column> <n> [{LOWEST}]', got {text!r}")
+        raise ConfigError(
+            f"objects.{name}: expected '<collection> <column> <n> [{LOWEST}]', got {text!r}"
+        )
     coll, sel, n, tail = m.group(1), m.group(2), int(m.group(3)), m.group(4)
     if coll not in collections:
         raise ConfigError(f"objects.{name}: unknown collection {coll!r}")
     if sel == REST and tail is not None:
-        raise ConfigError(f"objects.{name}: '{REST}' takes no {LOWEST!r} (its order is the rest_order option)")
+        raise ConfigError(
+            f"objects.{name}: '{REST}' takes no {LOWEST!r} (its order is the rest_order option)"
+        )
     if n < 1 or n > collections[coll].max:
-        raise ConfigError(f"objects.{name}: n={n} must be within 1..max={collections[coll].max} of {coll}")
+        raise ConfigError(
+            f"objects.{name}: n={n} must be within 1..max={collections[coll].max} of {coll}"
+        )
     return RoleSpec(name, coll, sel, n, ascending=tail == LOWEST)
 
 
@@ -336,7 +357,9 @@ def parse_config(cfg: dict) -> NetworkSpec:
     event = _str_list(cfg.get("event", []) or [], "event")
     min_jets = cfg.get("min_jets", 4)
     if isinstance(min_jets, bool) or not isinstance(min_jets, int) or min_jets < 2:
-        raise ConfigError(f"min_jets must be an integer >= 2 (the minimum jet multiplicity of the selection), got {min_jets!r}")
+        raise ConfigError(
+            f"min_jets must be an integer >= 2 (the minimum jet multiplicity of the selection), got {min_jets!r}"
+        )
 
     # hypotheses ---------------------------------------------------------------------------
     leaves = set(roles) | {c.name for c in collections.values() if c.max == 1}
@@ -460,7 +483,20 @@ def parse_config(cfg: dict) -> NetworkSpec:
         if h not in [o.name for o in outputs[1:]]:
             raise ConfigError(f"training.head_weights: {h!r} is not a secondary output")
 
-    return NetworkSpec(collections, roles, event, nodes, hypotheses, attention, outputs, combine, training, relations, owner, min_jets)
+    return NetworkSpec(
+        collections,
+        roles,
+        event,
+        nodes,
+        hypotheses,
+        attention,
+        outputs,
+        combine,
+        training,
+        relations,
+        owner,
+        min_jets,
+    )
 
 
 def read_config_dict(path: str | Path) -> dict:
@@ -478,6 +514,21 @@ def load_config(path: str | Path) -> NetworkSpec:
     return parse_config(read_config_dict(path))
 
 
-__all__ = ["ConfigError", "Collection", "RoleSpec", "HypothesisSpec", "AttentionSpec", "RelationSpec", "OutputSpec",
-           "TrainingSpec", "NetworkSpec", "parse_config", "read_config_dict", "load_config", "SECTIONS", "REST",
-           "LOWEST", "KINEMATIC"]
+__all__ = [
+    "KINEMATIC",
+    "LOWEST",
+    "REST",
+    "SECTIONS",
+    "AttentionSpec",
+    "Collection",
+    "ConfigError",
+    "HypothesisSpec",
+    "NetworkSpec",
+    "OutputSpec",
+    "RelationSpec",
+    "RoleSpec",
+    "TrainingSpec",
+    "load_config",
+    "parse_config",
+    "read_config_dict",
+]
