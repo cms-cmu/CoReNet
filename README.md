@@ -126,13 +126,21 @@ corenet-train --config examples/bbww/bbww.yaml --input examples/data/bbww_all.h5
 ```
 
 * `--fold 0`: hold out fold 0 for testing. With `--fold -1` (the default), train one model per fold in turn.
-* `--exclude-folds 1`: keep fold 1 out of the training and use it for validation.
+* `--exclude-folds 1`: keep fold 1 out of the training and use it for validation. `--exclude-folds next`
+  uses the fold `(k + 1) % n_folds` of the held-out fold `k`.
+* `--n-folds 5`: take the fold of an event as `event % 5` from `EVENT/event` instead of the `EVENT/fold`
+  column ([docs/Dataset.md](docs/Dataset.md)); the rule is stored in the checkpoint and reused by
+  `corenet-evaluate`.
 * `--early-stop-patience 5`: stop when the validation AUC has not improved for 5 epochs and keep the best epoch.
+* `--freeze-epoch 15 --finetune-layers head_main. head_reduce. aux_heads. --finetune-lr 1.0e-3 --finetune-batch-size 4096`:
+  the fine-tuning stage; from epoch 15 on only the parameters whose names start with the given prefixes
+  (default: the output layers; `none` freezes nothing) are trained, at this learning rate and batch size
+  (default: the schedule continues).
 * `--epochs`, `--lr`, `--seed`, ...: override the training settings of the configuration file.
   See [docs/Options.md](docs/Options.md) or `corenet-train --help`.
 
-The number of folds is not a training option: it is set when the input file is written, as the set of
-values in `EVENT/fold` ([docs/Dataset.md](docs/Dataset.md)). The example files have 5 folds.
+The folds come from the input file: the `EVENT/fold` column, or `event % K` with `--n-folds K`
+([docs/Dataset.md](docs/Dataset.md)). The example files have 5 folds in `EVENT/fold`.
 
 Per fold `k`, the output directory receives:
 
