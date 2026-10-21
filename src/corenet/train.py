@@ -62,6 +62,7 @@ RECIPE_DEFAULTS = {
     "class_norm": True,
     "seed": 42,
     "rest_order": "pt",
+    "early_stop_patience": 0,
 }
 
 
@@ -225,6 +226,7 @@ def train_fold(
     out_dir.mkdir(parents=True, exist_ok=True)
     recipe = {k: getattr(args, k) for k in RECIPE_DEFAULTS}
     history, history_path = [], out_dir / f"history_fold{fold}.json"
+    best_auc, best_epoch, best_state, bad, stopped = None, None, None, 0, False   # early stopping state
     for epoch in range(args.epochs):
         bs, n_gb = batch_schedule(epoch, args.batch_size_init)
         model.setGhostBatches(n_gb)
@@ -272,44 +274,37 @@ def train_fold(
             entry.update(validation_metrics(model, data, val_idx, labels, val_weights))
             model.setGhostBatches(n_gb)  # predict() set them to 0
         history.append(entry)
-        history_path.write_text(
-            json.dumps(
-                {
-                    "fold": fold,
-                    "exclude_folds": args.exclude_folds,
-                    "config": str(args.config),
-                    "classes": spec.classes,
-                    "recipe": recipe,
-                    "n_train": len(train_idx),
-                    "n_val": len(val_idx),
-                    "history": history,
-                },
-                indent=1,
-            )
-        )
-        logging.info(
-            f"fold {fold} | epoch {epoch:02d} | bs {bs:6d} | gbn {n_gb:2d} | lr {optimizer.param_groups[0]['lr']:.2e} | loss {entry['train_loss']:.5f}"
-            + (
-                f" | val loss {entry['val_loss']:.5f} | val auc {entry.get('val_auc', float('nan')):.5f}"
-                if len(val_idx)
-                else ""
-            )
-        )
+        history_path.write_text(json.dumps({"fold": fold, "exclude_folds": args.exclude_folds, "config": str(args.config),
+                                            "classes": spec.classes, "recipe": recipe,
+                                            "n_train": int(len(train_idx)), "n_val": int(len(val_idx)),
+                                            "history": history}, indent=1))
+        logging.info(f"fold {fold} | epoch {epoch:02d} | bs {bs:6d} | gbn {n_gb:2d} | lr {optimizer.param_groups[0]['lr']:.2e} | loss {entry['train_loss']:.5f}"
+                     + (f" | val loss {entry['val_loss']:.5f} | val auc {entry.get('val_auc', float('nan')):.5f}" if len(val_idx) else ""))
+        if args.early_stop_patience and len(val_idx):
+            auc = entry.get("val_auc")
+            if auc is not None and (best_auc is None or auc > best_auc):
+                best_auc, best_epoch, bad = auc, epoch, 0
+                best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            else:
+                bad += 1
+            if bad >= args.early_stop_patience:
+                stopped = True
+                logging.info(f"fold {fold}: early stopping after epoch {epoch}: the validation AUC did not improve for "
+                             f"{bad} epochs (best {best_auc:.5f} at epoch {best_epoch})")
+                break
 
+    final_epoch = args.epochs - 1 if not stopped else epoch
+    if args.early_stop_patience and best_state is not None:
+        model.load_state_dict(best_state)                 # keep the weights of the best validation epoch
+        final_epoch = best_epoch
+        doc = json.loads(history_path.read_text())
+        doc.update({"best_epoch": best_epoch, "stopped_after_epoch": epoch if stopped else None,
+                    "early_stop_patience": args.early_stop_patience})
+        history_path.write_text(json.dumps(doc, indent=1))
+        logging.info(f"fold {fold}: keeping the weights of epoch {best_epoch} (validation AUC {best_auc:.5f})")
     ckpt = out_dir / f"model_fold{fold}.pkl"
-    save_checkpoint(
-        ckpt,
-        model,
-        config,
-        args.config,
-        {
-            "fold": fold,
-            "epoch": args.epochs - 1,
-            "exclude_folds": args.exclude_folds,
-            "input": str(args.input),
-            **recipe,
-        },
-    )
+    save_checkpoint(ckpt, model, config, args.config,
+                    {"fold": fold, "epoch": final_epoch, "exclude_folds": args.exclude_folds, "input": str(args.input), **recipe})
     probs, views, heads = predict(model, data, test_idx)
     write_predictions(
         out_dir / f"predictions_fold{fold}.h5",
@@ -345,75 +340,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--input", required=True, help="HDF5 file with all folds (docs/Dataset.md)"
     )
     p.add_argument("--output-dir", default="runs/corenet")
-    p.add_argument(
-        "--fold",
-        type=int,
-        default=-1,
-        help="held-out (test) fold, or -1 for every fold in turn",
-    )
-    p.add_argument(
-        "--exclude-folds",
-        type=int,
-        nargs="*",
-        default=[],
-        help="folds left out of training and used for per-epoch validation",
-    )
-    g = p.add_argument_group(
-        "training recipe (default: the `trainer:` section of --config, else the built-in value)"
-    )
-    g.add_argument(
-        "--epochs", type=int, help=f"number of epochs [{RECIPE_DEFAULTS['epochs']}]"
-    )
-    g.add_argument(
-        "--freeze-epoch",
-        type=int,
-        help=f"epoch at which all but the output heads are frozen [{RECIPE_DEFAULTS['freeze_epoch']}]",
-    )
-    g.add_argument(
-        "--lr", type=float, help=f"Adam learning rate [{RECIPE_DEFAULTS['lr']}]"
-    )
-    g.add_argument(
-        "--lr-milestones",
-        type=int,
-        nargs="*",
-        help="epochs after which the learning rate is multiplied by --lr-gamma [15 .. 24]",
-    )
-    g.add_argument(
-        "--lr-gamma",
-        type=float,
-        help=f"learning-rate decay factor [{RECIPE_DEFAULTS['lr_gamma']}]",
-    )
-    g.add_argument(
-        "--batch-size-init",
-        type=int,
-        help=f"epoch-0 batch size; doubles at epochs 1, 3, 6, 10 [{RECIPE_DEFAULTS['batch_size_init']}]",
-    )
-    g.add_argument(
-        "--class-norm",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="normalise the weights of every class to 1 over the training set [on]",
-    )
-    g.add_argument(
-        "--seed",
-        type=int,
-        help=f"random seed (the seed of fold k is seed + k) [{RECIPE_DEFAULTS['seed']}]",
-    )
-    g.add_argument(
-        "--rest-order",
-        choices=["pt", "selector"],
-        help="ordering of the 'rest' selector [pt]",
-    )
-    p.add_argument(
-        "--save-every-epoch",
-        action="store_true",
-        help="also save model_fold{k}_epoch{e}.pkl after every epoch",
-    )
-    p.add_argument(
-        "--device",
-        default="cuda",
-        help="torch device; falls back to cpu when CUDA is unavailable",
-    )
+    p.add_argument("--fold", type=int, default=-1, help="held-out (test) fold, or -1 for every fold in turn")
+    p.add_argument("--exclude-folds", type=int, nargs="*", default=[],
+                   help="folds left out of training and used for per-epoch validation")
+    g = p.add_argument_group("training recipe (default: the `trainer:` section of --config, else the built-in value)")
+    g.add_argument("--epochs", type=int, help=f"number of epochs [{RECIPE_DEFAULTS['epochs']}]")
+    g.add_argument("--freeze-epoch", type=int, help=f"epoch at which all but the output heads are frozen [{RECIPE_DEFAULTS['freeze_epoch']}]")
+    g.add_argument("--lr", type=float, help=f"Adam learning rate [{RECIPE_DEFAULTS['lr']}]")
+    g.add_argument("--lr-milestones", type=int, nargs="*", help="epochs after which the learning rate is multiplied by --lr-gamma [15 .. 24]")
+    g.add_argument("--lr-gamma", type=float, help=f"learning-rate decay factor [{RECIPE_DEFAULTS['lr_gamma']}]")
+    g.add_argument("--batch-size-init", type=int, help=f"epoch-0 batch size; doubles at epochs 1, 3, 6, 10 [{RECIPE_DEFAULTS['batch_size_init']}]")
+    g.add_argument("--class-norm", action=argparse.BooleanOptionalAction, default=None,
+                   help="normalise the weights of every class to 1 over the training set [on]")
+    g.add_argument("--seed", type=int, help=f"random seed (the seed of fold k is seed + k) [{RECIPE_DEFAULTS['seed']}]")
+    g.add_argument("--early-stop-patience", type=int, help="stop when the validation AUC has not improved for this many epochs "
+                   f"and keep the weights of the best epoch; 0 = train every epoch; needs --exclude-folds [{RECIPE_DEFAULTS['early_stop_patience']}]")
+    g.add_argument("--rest-order", choices=["pt", "selector"], help="ordering of the 'rest' selector [pt]")
+    p.add_argument("--save-every-epoch", action="store_true", help="also save model_fold{k}_epoch{e}.pkl after every epoch")
+    p.add_argument("--device", default="cuda", help="torch device; falls back to cpu when CUDA is unavailable")
     return p
 
 
@@ -439,6 +383,7 @@ def _check_recipe(r: dict) -> None:
         "class_norm": (lambda x: isinstance(x, bool), "true or false"),
         "seed": (lambda x: is_int(x), "an integer"),
         "rest_order": (lambda x: x in ("pt", "selector"), "'pt' or 'selector'"),
+        "early_stop_patience": (lambda x: is_int(x) and x >= 0, "an integer >= 0"),
     }
     for key, (ok, what) in rules.items():
         if key in r and not ok(r[key]):
@@ -470,11 +415,9 @@ def main(argv=None):
     config = read_config_dict(args.config)
     spec = parse_config(config)
     resolve_recipe(args, config)
-    device = torch.device(
-        args.device
-        if torch.cuda.is_available() and args.device.startswith("cuda")
-        else "cpu"
-    )
+    if args.early_stop_patience and not args.exclude_folds:
+        build_parser().error("--early-stop-patience needs a validation fold: pass --exclude-folds")
+    device = torch.device(args.device if torch.cuda.is_available() and args.device.startswith("cuda") else "cpu")
     ds = H5Dataset(args.input, spec, rest_order=args.rest_order)
     logging.info(
         f"{args.input}: {len(ds):,} events, device={device}, recipe "
