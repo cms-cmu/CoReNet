@@ -30,7 +30,7 @@ import numpy as np
 import torch
 
 from .data import h5 as loader
-from .models.config import ConfigError, NetworkSpec, parse_config, read_config_dict
+from .models.config import REST, ConfigError, NetworkSpec, parse_config, read_config_dict
 from .models.network import CoReNet
 
 
@@ -116,11 +116,11 @@ def check_config(path, report: Report) -> NetworkSpec | None:
         return None
 
     for c in spec.collections.values():
-        report.ok(sec, f"collection `{c.name}`: max {c.max}, features {c.features}")
+        report.ok(sec, f"collection `{c.name}`: max {c.max}, features {c.features} (the network inputs)")
     for r in spec.roles.values():
-        report.ok(
-            sec, f"role `{r.name}`: {r.n} x `{r.collection}` selected by `{r.selector}`"
-        )
+        how = "" if r.selector == REST else (" lowest first" if r.ascending else " highest first")
+        report.ok(sec, f"role `{r.name}`: {r.n} x `{r.collection}` selected by `{r.selector}`{how} "
+                  f"(reads {', '.join(r.columns)} for the selection)")
     for h, T in model.tables.items():
         nodes = ", ".join(f"{n} ({T.nodes[n].n})" for n in model.levels[h])
         ctx = spec.hypotheses[h].context
@@ -208,13 +208,15 @@ def check_data(
                 continue
             group = f["INPUTS"][gname]
             slots = None
-            for feat in coll.features:
+            columns = loader.columns_to_read(spec, coll)
+            selection = [c for c in columns if c not in coll.features]       # read for a selector only
+            for feat in columns:
                 name = f"INPUTS/{gname}/{feat}"
+                readers = [f"`{r.name}`" for r in spec.roles.values()
+                           if r.collection == coll.name and feat in r.columns]
+                why = (f" (read for the selection by {', '.join(readers)}, not a feature)" if feat in selection else "")
                 if feat not in group or not isinstance(group[feat], h5py.Dataset):
-                    report.fail(
-                        sec,
-                        f"{who} expects dataset {name}: not found (INPUTS/{gname} has {sorted(group)})",
-                    )
+                    report.fail(sec, f"{who} expects dataset {name}{why}: not found (INPUTS/{gname} has {sorted(group)})")
                     continue
                 ds = group[feat]
                 if not _numeric(ds):
@@ -271,20 +273,16 @@ def check_data(
                 k for k in ("pt", "eta", "phi", "mass") if k not in coll.features
             ]
             note = f"; {', '.join(missing_kin)} taken as 0" if missing_kin else ""
-            report.ok(
-                sec,
-                f"{who}: INPUTS/{gname} with {coll.features}"
-                + (f", {slots} slots" if slots else "")
-                + note,
-            )
+            report.ok(sec, f"{who}: INPUTS/{gname} with features {coll.features}" + (f", {slots} slots" if slots else "") + note)
+            if selection:
+                report.ok(sec, f"{who}: {selection} read for the selection only (not network inputs)")
 
         # ---- event scalars
         for name in spec.event:
             kind, where = loader.event_source(spec, name)
             if kind == "computed":
-                report.ok(
-                    sec, f"event scalar `{name}` computed from collection `{where}`"
-                )
+                note = f" and enters as log({name} - {spec.min_jets - 1}) (min_jets {spec.min_jets})" if "nSelJets" in name else ""
+                report.ok(sec, f"event scalar `{name}` computed from collection `{where}`{note}")
             elif where not in f:
                 report.fail(
                     sec, f"event scalar `{name}` expects dataset {where}: not found"
