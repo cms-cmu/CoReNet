@@ -15,20 +15,21 @@ plus ``labels`` (``EVENT/label``, or ``CLASSIFICATIONS/EVENT/signal`` when absen
 information is read: the roles are chosen from reconstructed quantities only.
 
 A collection's ``features`` are exactly the channels of its tensors. A selector reads the column it
-needs (``btag``: the ``btag`` and ``pt`` columns) from the file on its own, whether or not it is a
-feature; such a column is used for the selection only (``columns_to_read``). A column listed under
-``features`` is always a network input, ``btag`` included.
+needs (its column and ``pt``) from the file on its own, whether or not it is a feature; such a column
+is used for the selection only (``columns_to_read``). A column listed under ``features`` is always a
+network input, ``btag`` included.
 
     ds = H5Dataset("examples/data/bbww_small.h5", load_config("examples/bbww/bbww.yaml"))
     out = model(ds.inputs)
 
 Selectors, applied to the collection's present members in configuration order:
 
-    btag n   the n highest-btag members, ties broken by pT
-    pt   n   the n highest-pT members
-    rest n   up to n of the members no earlier role consumed; ``rest_order`` decides their order:
-             "pt" (default) or "selector", which continues the ordering of the preceding role on the
-             same collection.
+    <column> n          the n members with the highest value of <column> (any dataset of the collection's
+                        group: btag, pt, mass, ...), ties broken by the highest pT, then file order
+    <column> n lowest   the n members with the lowest value of <column>, ties again by the highest pT
+    rest n              up to n of the members no earlier role consumed; ``rest_order`` decides their order:
+                        "pt" (default) or "selector", which continues the ordering of the preceding role on
+                        the same collection.
 
 ``nSelJets`` and ``HT`` are always computed from the first collection with ``max > 1`` (number of
 present members and scalar sum of their pT); every other event scalar is read from ``EVENT/<name>``.
@@ -43,7 +44,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from ..models.config import Collection, NetworkSpec, RoleSpec
+from ..models.config import REST, Collection, NetworkSpec, RoleSpec
 
 # collection name (lower case) -> group names accepted in INPUTS, in order of preference
 GROUP_ALIASES = {
@@ -53,11 +54,7 @@ GROUP_ALIASES = {
     "met": ("Met", "MET"),
 }
 COMPUTED_EVENT = ("nSelJets", "HT")
-BTAG_PRIORITY = 1e6  # btag dominates the sort key, pT breaks ties
-LABEL_KEYS = (
-    "EVENT/label",
-    "CLASSIFICATIONS/EVENT/signal",
-)  # first one present is used
+LABEL_KEYS = ("EVENT/label", "CLASSIFICATIONS/EVENT/signal")   # first one present is used
 WEIGHT_KEY, FOLD_KEY, EVENT_KEY = "EVENT/weight", "EVENT/fold", "EVENT/event"
 
 
@@ -124,19 +121,18 @@ def _read_collection(f: h5py.File, coll: Collection, columns: list[str]) -> tupl
     return feats, present
 
 
-def _selector_key(selector: str, feats: dict[str, np.ndarray]) -> np.ndarray:
-    """Sort key (ascending = preferred first) of a selector."""
-    if selector == "pt":
-        return -feats["pt"]
-    if selector == "btag":
-        return -(feats["btag"] * BTAG_PRIORITY + feats["pt"])
-    raise ValueError(f"unknown selector {selector!r}")
+def _selector_keys(role: RoleSpec, feats: dict[str, np.ndarray]) -> tuple[np.ndarray, ...]:
+    """Sort keys (smaller = preferred) of an explicit selector: the column, negated unless ``lowest``, then
+    -pt as the tie breaker. A lexicographic sort, so the column's scale does not matter."""
+    col = feats[role.selector]
+    return (col if role.ascending else -col, -feats["pt"])
 
 
-def _take(key: np.ndarray, avail: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
-    """(indices, valid) of the n preferred available members: (N, n) each, stable ties."""
-    order = np.argsort(np.where(avail, key, np.inf), axis=1, kind="stable")[:, :n]
-    rows = np.arange(len(key))[:, None]
+def _take(keys: tuple[np.ndarray, ...], avail: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
+    """(indices, valid) of the n preferred available members: (N, n) each. Available members first, then
+    by ``keys`` in order (the first key dominates), remaining ties in file order (stable)."""
+    order = np.lexsort((*reversed(keys), ~avail), axis=1)[:, :n]        # lexsort: the last key is the primary one
+    rows = np.arange(len(avail))[:, None]
     return order, avail[rows, order]
 
 
@@ -147,12 +143,8 @@ class H5Dataset(Dataset):
                 f"rest_order must be 'pt' or 'selector', got {rest_order!r}"
             )
         self.spec, self.path, self.rest_order = spec, Path(path), rest_order
-        self._taken: dict[
-            str, np.ndarray
-        ] = {}  # per collection: members already consumed by a role
-        self._last_key: dict[
-            str, np.ndarray
-        ] = {}  # per collection: sort key of the last explicit selector
+        self._taken: dict[str, np.ndarray] = {}                  # per collection: members already consumed by a role
+        self._last_keys: dict[str, tuple[np.ndarray, ...]] = {}  # per collection: sort keys of the last explicit selector
         inputs: dict[str, torch.Tensor] = {}
 
         with h5py.File(path, "r") as f:
@@ -198,17 +190,13 @@ class H5Dataset(Dataset):
         present: np.ndarray,
     ) -> torch.Tensor:
         taken = self._taken.setdefault(role.collection, np.zeros_like(present))
-        if role.selector == "rest":
-            key = (
-                self._last_key.get(role.collection)
-                if self.rest_order == "selector"
-                else None
-            )
-            key = _selector_key("pt", feats) if key is None else key
+        if role.selector == REST:
+            keys = self._last_keys.get(role.collection) if self.rest_order == "selector" else None
+            keys = (-feats["pt"],) if keys is None else keys
         else:
-            key = _selector_key(role.selector, feats)
-            self._last_key[role.collection] = key
-        idx, valid = _take(key, present & ~taken, role.n)
+            keys = _selector_keys(role, feats)
+            self._last_keys[role.collection] = keys
+        idx, valid = _take(keys, present & ~taken, role.n)
         rows = np.arange(len(present))[:, None]
         for j in range(role.n):  # mark the chosen members as consumed
             taken[rows[:, 0], idx[:, j]] |= valid[:, j]
