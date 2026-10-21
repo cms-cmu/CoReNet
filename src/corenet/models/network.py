@@ -9,7 +9,7 @@ Structure of one forward pass:
                      children; a massless MET leaf enters with eta = m = 0)
     2. features      log(1+pt), eta, dphi-to-parent, log(1+m) for every child slot; the top node
                      drops phi; event scalars whose name contains ``nSelJets`` enter as
-                     log(nSelJets - 3)
+                     log(nSelJets - (min_jets - 1))
     3. embedding     GBN embed (+ event scalars for leaves) -> conv, per role / node
     4. reinforce     bottom-up ResNetBlock per composite node (a node reused by several
                      hypotheses is computed once); ``context`` attention after the first level;
@@ -36,12 +36,7 @@ from .combinatorics import ResNetBlock, build_hypothesis_table
 from .config import KINEMATIC, ConfigError, NetworkSpec
 from .fourvectors import NonLU, PxPyPzE, addFourVectors, diObjectMass
 
-TAG_FEATURES = (
-    "btag",
-)  # selection tags: used by the role selectors, never fed to the network
-MASKED_LOGIT = (
-    -1e4
-)  # selector logit of an absent view (finite, so an all-absent event stays finite)
+MASKED_LOGIT = -1e4       # selector logit of an absent view (finite, so an all-absent event stays finite)
 
 
 # ------------------------------------------------------------------------------- small helpers
@@ -405,7 +400,7 @@ class CoReNet(nn.Module):
 
     def _extras(self, role):
         feats = self.spec.collection_of(role).features
-        return [f for f in feats if f not in KINEMATIC and f not in TAG_FEATURES]
+        return [f for f in feats if f not in KINEMATIC]           # every non-kinematic feature is an input
 
     def _kinematic_channels(self, role):
         feats = self.spec.collection_of(role).features
@@ -437,8 +432,8 @@ class CoReNet(nn.Module):
     def _prepare(self, inputs):
         """Kinematics, features and masks for every hypothesis. Returns a dict of intermediate tensors."""
         n = next(iter(inputs.values())).shape[0]
-        # per leaf (role or single object): four-vectors (n, 4, slots), its non-kinematic features (isE / isM; btag
-        # is never used), and which slots hold a real object
+        # per leaf (role or single object): four-vectors (n, 4, slots), its non-kinematic features (isE / isM, ...;
+        # every feature of the collection is an input), and which slots hold a real object
         leaf_kin, leaf_extra, leaf_present, etaSign = {}, {}, {}, None
         for r in self.leaf_order:
             if r not in inputs:
@@ -460,21 +455,15 @@ class CoReNet(nn.Module):
                 kin[:, 1, :] = etaSign * kin[:, 1, :]
             leaf_kin[r] = kin
 
-        # event scalars; a jet multiplicity (name containing ``nSelJets``) enters as log(nSelJets - 3)
+        # event scalars; a jet multiplicity (name containing ``nSelJets``) enters as log(nSelJets - (min_jets - 1)),
+        # so that the minimum multiplicity of the selection maps to log(1) = 0
         a = None
         if self.dA:
             a = inputs["event"].view(n, self.dA, 1)
             for idx, name in enumerate(self.spec.event):
                 if "nSelJets" in name:
-                    a = torch.cat(
-                        [
-                            a[:, :idx],
-                            torch.log(a[:, idx : idx + 1] - 3),
-                            a[:, idx + 1 :],
-                        ],
-                        dim=1,
-                    )
-            a = finite(a)  # nSelJets <= 3 would give -inf / NaN
+                    a = torch.cat([a[:, :idx], torch.log(a[:, idx:idx + 1] - (self.spec.min_jets - 1)), a[:, idx + 1:]], dim=1)
+            a = finite(a)                                             # nSelJets < min_jets would give -inf / NaN
 
         out = {
             "n": n,
