@@ -5,10 +5,11 @@ corenet-evaluate: apply a trained CoReNet to an HDF5 file and compute its perfor
         --output runs/hh4b/eval_fold0.h5
 
 Events: by default the fold held out when the checkpoint was trained (``--fold -1`` = every event of
-the file). The output file (layout in docs/Dataset.md) holds the class probabilities, the view
-(candidate) probabilities of every multi-candidate hypothesis, the auxiliary head probabilities,
-the event labels / weights and, for the main output, the ROC curve; the AUCs are printed and
-written as JSON next to it (``<output>.json``).
+the file), with the checkpoint's fold rule: ``EVENT/fold`` of the file, or fold = event % n_folds when
+the model was trained with ``--n-folds`` (``--n-folds K`` overrides). The output file (layout in
+docs/Dataset.md) holds the class probabilities, the view (candidate) probabilities of every
+multi-candidate hypothesis, the auxiliary head probabilities, the event labels / weights and, for the
+main output, the ROC curve; the AUCs are printed and written as JSON next to it (``<output>.json``).
 
 Metrics use the event weights of the file, clipped at >= 0 (``--unweighted`` ignores them):
   * main AUC: class 1 (the first output) against every other class, scored by P(class 1);
@@ -192,6 +193,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="evaluate the events of this fold; -1 = every event (default: the checkpoint's held-out fold)",
     )
     p.add_argument(
+        "--n-folds",
+        type=int,
+        default=None,
+        help="use fold = event %% K computed from EVENT/event instead of the EVENT/fold column "
+        "(default: the checkpoint's rule)",
+    )
+    p.add_argument(
         "--rest-order",
         choices=["pt", "selector"],
         default=None,
@@ -208,7 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None):
-    from .checkpoint import load_checkpoint
+    from .checkpoint import load_checkpoint, n_folds_of
 
     args = build_parser().parse_args(argv)
     logging.basicConfig(
@@ -222,7 +230,8 @@ def main(argv=None):
     model, spec, ckpt = load_checkpoint(args.checkpoint, args.config, device)
     meta = ckpt.get("metadata", {})
     rest_order = args.rest_order or meta.get("rest_order", "pt")
-    ds = H5Dataset(args.input, spec, rest_order=rest_order)
+    n_folds = args.n_folds if args.n_folds is not None else n_folds_of(meta)
+    ds = H5Dataset(args.input, spec, rest_order=rest_order, n_folds=n_folds)
     fold = args.fold if args.fold is not None else meta.get("fold", -1)
     idx = (
         np.arange(len(ds))
@@ -233,7 +242,7 @@ def main(argv=None):
         raise SystemExit(f"{args.input}: no events in fold {fold}")
     logging.info(
         f"{args.checkpoint}: {count_parameters(model):,} parameters; evaluating {len(idx):,} events "
-        f"({'all folds' if fold is None or fold < 0 else f'fold {fold}'}) of {args.input}"
+        f"({'all folds' if fold is None or fold < 0 else f'fold {fold}'}; folds: {ds.fold_rule}) of {args.input}"
     )
 
     probs, views, heads = predict(model, Batches(ds, device), idx, args.batch_size)
@@ -260,6 +269,8 @@ def main(argv=None):
         attrs={
             "checkpoint": str(args.checkpoint),
             "fold": -1 if fold is None else int(fold),
+            "n_folds": ds.n_folds,
+            "fold_rule": ds.fold_rule,
             "n_parameters": count_parameters(model),
             "auc_main": metrics["auc"]["main"] or float("nan"),
         },
