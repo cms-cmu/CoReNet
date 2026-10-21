@@ -5,7 +5,9 @@ configurations (HH -> 4b: 2 classes; HH -> bbWW: 3 classes and an auxiliary ttba
   2. the prediction file has the documented layout, normalised probabilities, the held-out events,
   3. the freeze leaves exactly the output-head parameters trainable, parameter counts 1,508 / 3,832,
   4. the checkpoint is self-contained and corenet-evaluate reproduces the training-time predictions,
-  5. the `trainer:` section of the configuration sets the recipe and the command line overrides it.
+  5. the `trainer:` section of the configuration sets the recipe and the command line overrides it,
+  6. the fine-tuning stage (finetune_layers / finetune_lr / finetune_batch_size) and its defaults,
+  7. the fold rule (--n-folds, --exclude-folds next) and its record in checkpoint and predictions.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import pytest
 import yaml
 from synthetic import write_synthetic
 
@@ -253,28 +256,343 @@ def test_train_and_evaluate() -> None:
 def test_early_stopping() -> None:
     """--early-stop-patience: stop after N epochs without a better validation AUC and keep the best epoch."""
     import torch
+
     with tempfile.TemporaryDirectory(prefix="corenet_es_") as tmp:
         tmp = Path(tmp)
         data = write_synthetic(tmp / "hh4b_all.h5", "hh4b")
         out_dir = tmp / "m"
-        train.main(["--config", str(HH4B), "--input", str(data), "--output-dir", str(out_dir), "--fold", "0",
-                    "--exclude-folds", "1", "--epochs", "12", "--batch-size-init", "128", "--early-stop-patience", "1",
-                    "--device", "cpu"])
+        train.main(
+            [
+                "--config",
+                str(HH4B),
+                "--input",
+                str(data),
+                "--output-dir",
+                str(out_dir),
+                "--fold",
+                "0",
+                "--exclude-folds",
+                "1",
+                "--epochs",
+                "12",
+                "--batch-size-init",
+                "128",
+                "--early-stop-patience",
+                "1",
+                "--device",
+                "cpu",
+            ]
+        )
         h = json.loads((out_dir / "history_fold0.json").read_text())
         aucs = [e["val_auc"] for e in h["history"]]
         best = max(range(len(aucs)), key=lambda i: aucs[i])
         assert h["best_epoch"] == best and h["early_stop_patience"] == 1
-        if h["stopped_after_epoch"] is not None:                    # stopped: one non-improving epoch after the best
+        if (
+            h["stopped_after_epoch"] is not None
+        ):  # stopped: one non-improving epoch after the best
             assert h["stopped_after_epoch"] == best + 1 and len(aucs) == best + 2
         else:
             assert len(aucs) == 12
-        ck = torch.load(out_dir / "model_fold0.pkl", map_location="cpu", weights_only=False)
-        assert ck["metadata"]["epoch"] == best and ck["metadata"]["early_stop_patience"] == 1
+        ck = torch.load(
+            out_dir / "model_fold0.pkl", map_location="cpu", weights_only=False
+        )
+        assert (
+            ck["metadata"]["epoch"] == best
+            and ck["metadata"]["early_stop_patience"] == 1
+        )
         # without a validation fold the option is refused
         try:
-            train.main(["--config", str(HH4B), "--input", str(data), "--output-dir", str(tmp / "n"), "--fold", "0",
-                        "--epochs", "2", "--early-stop-patience", "1", "--device", "cpu"])
+            train.main(
+                [
+                    "--config",
+                    str(HH4B),
+                    "--input",
+                    str(data),
+                    "--output-dir",
+                    str(tmp / "n"),
+                    "--fold",
+                    "0",
+                    "--epochs",
+                    "2",
+                    "--early-stop-patience",
+                    "1",
+                    "--device",
+                    "cpu",
+                ]
+            )
         except SystemExit:
             pass
         else:
             raise AssertionError("expected an error without --exclude-folds")
+
+
+def _train(data: Path, out_dir: Path, *extra: str, epochs: int = 2) -> dict:
+    """corenet-train on the synthetic hh4b file (fold 0 held out, fold 1 validation, freeze at epoch 1)."""
+    train.main(
+        [
+            "--config",
+            str(HH4B),
+            "--input",
+            str(data),
+            "--output-dir",
+            str(out_dir),
+            "--fold",
+            "0",
+            "--exclude-folds",
+            "1",
+            "--epochs",
+            str(epochs),
+            "--batch-size-init",
+            "128",
+            "--freeze-epoch",
+            "1",
+            "--device",
+            "cpu",
+            *extra,
+        ]
+    )
+    return json.loads((out_dir / "history_fold0.json").read_text())
+
+
+def _metadata(out_dir: Path, fold: int = 0) -> dict:
+    import torch
+
+    return torch.load(
+        out_dir / f"model_fold{fold}.pkl", map_location="cpu", weights_only=False
+    )["metadata"]
+
+
+def test_finetune_layers() -> None:
+    """The default fine-tuning stage equals the explicit head prefixes bit for bit; `none` freezes nothing."""
+    with tempfile.TemporaryDirectory(prefix="corenet_ft_") as tmp:
+        tmp = Path(tmp)
+        data = write_synthetic(tmp / "hh4b_all.h5", "hh4b")
+        default = _train(data, tmp / "default")
+        explicit = _train(
+            data, tmp / "explicit", "--finetune-layers", *train.HEAD_PREFIXES
+        )
+        assert default["history"] == explicit["history"]
+        assert default["recipe"] == explicit["recipe"]
+        assert default["recipe"]["finetune_layers"] == list(train.HEAD_PREFIXES)
+        assert (
+            default["recipe"]["finetune_lr"] is None
+            and default["recipe"]["finetune_batch_size"] is None
+        )
+        fresh = CoReNet(load_config(HH4B), device="cpu")
+        n_all = train.count_trainable(
+            fresh
+        )  # some parameters are non-trainable by construction
+        n_heads = train.freeze_heads(fresh)
+        assert 0 < n_heads < n_all < evaluate.count_parameters(fresh)
+        assert default["finetune_trainable_parameters"] == n_heads
+        meta = _metadata(tmp / "default")
+        assert meta["finetune_trainable_parameters"] == n_heads
+        assert meta["finetune_layers"] == list(train.HEAD_PREFIXES)
+        assert meta["finetune_lr"] is None and meta["finetune_batch_size"] is None
+        # `none`: nothing is frozen, every trainable parameter of a fresh model stays trainable
+        none = _train(data, tmp / "none", "--finetune-layers", "none")
+        assert none["recipe"]["finetune_layers"] == []
+        assert none["finetune_trainable_parameters"] == n_all
+        assert _metadata(tmp / "none")["finetune_trainable_parameters"] == n_all
+        assert (
+            none["history"][0] == default["history"][0]
+        )  # identical before the freeze
+        assert none["history"][1]["train_loss"] != default["history"][1]["train_loss"]
+        with pytest.raises(ConfigError, match="'none' cannot be combined"):
+            _train(data, tmp / "bad", "--finetune-layers", "none", "head_main.")
+
+
+def test_finetune_lr_and_batch_size() -> None:
+    """--finetune-lr / --finetune-batch-size apply from the freeze epoch; the milestones continue from the lr."""
+    with tempfile.TemporaryDirectory(prefix="corenet_ft_") as tmp:
+        tmp = Path(tmp)
+        data = write_synthetic(tmp / "hh4b_all.h5", "hh4b")
+        h = _train(
+            data,
+            tmp / "m",
+            "--finetune-lr",
+            "1e-4",
+            "--finetune-batch-size",
+            "256",
+            "--lr-milestones",
+            "3",
+            epochs=3,
+        )
+        e0, e1, e2 = h["history"]
+        assert (
+            e0["batch_size"] == 128 and e0["ghost_batches"] == 16
+        )  # schedule: 128 // 8
+        assert e0["lr"] == 1e-2
+        assert (
+            e1["batch_size"] == 256 and e1["ghost_batches"] == 16
+        )  # schedule: min(16, 256 // 8)
+        assert e1["lr"] == 1e-4
+        assert e2["batch_size"] == 256 and e2["ghost_batches"] == 16
+        assert e2["lr"] == pytest.approx(
+            1e-4 * 0.25
+        )  # milestone 3 multiplies the fine-tuning lr
+        assert h["recipe"]["finetune_lr"] == 1e-4
+        assert h["recipe"]["finetune_batch_size"] == 256
+        meta = _metadata(tmp / "m")
+        assert meta["finetune_lr"] == 1e-4 and meta["finetune_batch_size"] == 256
+        assert (
+            meta["finetune_trainable_parameters"] == h["finetune_trainable_parameters"]
+        )
+    assert train.finetune_batch(10, 1024, None) == (16384, 0)
+    assert train.finetune_batch(10, 1024, 256) == (256, 0)  # 0 ghost batches stay 0
+    assert train.finetune_batch(1, 1024, 256) == (256, 16)
+    assert train.finetune_batch(1, 1024, 32) == (32, 4)
+    assert train.finetune_batch(0, 1024, 4) == (4, 1)
+
+
+def test_finetune_recipe_from_config() -> None:
+    """The three fine-tuning keys in the trainer: section, and their validation."""
+    cfg = yaml.safe_load(HH4B.read_text())
+    cfg["trainer"] = {
+        "finetune_layers": ["head_main.", "resnet."],
+        "finetune_lr": 0.0001,
+        "finetune_batch_size": 256,
+    }
+    args = train.build_parser().parse_args(["--config", "x", "--input", "y"])
+    train.resolve_recipe(args, cfg)
+    assert args.finetune_layers == ["head_main.", "resnet."]
+    assert args.finetune_lr == 0.0001 and args.finetune_batch_size == 256
+    args = train.build_parser().parse_args(
+        ["--config", "x", "--input", "y", "--finetune-layers", "none"]
+    )
+    train.resolve_recipe(args, cfg)  # the command line wins
+    assert args.finetune_layers == []
+    cfg["trainer"] = {"finetune_layers": "none"}
+    args = train.build_parser().parse_args(["--config", "x", "--input", "y"])
+    assert train.resolve_recipe(args, cfg).finetune_layers == []
+    for bad, message in [
+        ({"finetune_layers": ["none", "head_main."]}, "cannot be combined"),
+        ({"finetune_layers": [1]}, "finetune_layers must be a list"),
+        ({"finetune_lr": 0.0}, "finetune_lr must be a number > 0"),
+        ({"finetune_lr": "1e-4"}, "finetune_lr must be a number > 0"),
+        ({"finetune_batch_size": 0}, "finetune_batch_size must be an integer >= 1"),
+    ]:
+        cfg["trainer"] = bad
+        with pytest.raises(ConfigError, match=message):
+            train.resolve_recipe(
+                train.build_parser().parse_args(["--config", "x", "--input", "y"]), cfg
+            )
+
+
+def test_n_folds_rule() -> None:
+    """--n-folds K: folds = event % K; --exclude-folds next; the rule is stored and reused by corenet-evaluate."""
+    from corenet.data.h5 import FOLD_RULE_COLUMN, FOLD_RULE_EVENT
+
+    assert train.resolve_exclude_folds(["next"], 4, 5) == [0]
+    assert train.resolve_exclude_folds([2, "next"], 0, 3) == [2, 1]
+    with tempfile.TemporaryDirectory(prefix="corenet_nf_") as tmp:
+        tmp = Path(tmp)
+        data = write_synthetic(
+            tmp / "hh4b_all.h5", "hh4b"
+        )  # events 0..N-1, 5 random folds
+        out_dir = tmp / "m"
+        train.main(
+            [
+                "--config",
+                str(HH4B),
+                "--input",
+                str(data),
+                "--output-dir",
+                str(out_dir),
+                "--n-folds",
+                "3",
+                "--fold",
+                "0",
+                "--exclude-folds",
+                "next",
+                "--epochs",
+                "1",
+                "--batch-size-init",
+                "128",
+                "--device",
+                "cpu",
+            ]
+        )
+        h = json.loads((out_dir / "history_fold0.json").read_text())
+        assert h["exclude_folds"] == [1] and h["n_folds"] == 3
+        assert h["fold_rule"] == FOLD_RULE_EVENT == "event % n_folds"
+        meta = _metadata(out_dir)
+        assert meta["n_folds"] == 3 and meta["fold_rule"] == FOLD_RULE_EVENT
+        assert meta["exclude_folds"] == [1]
+        with h5py.File(data, "r") as f:
+            event = f["EVENT/event"][...]
+        n_test, n_val = int((event % 3 == 0).sum()), int((event % 3 == 1).sum())
+        assert h["n_val"] == n_val and h["n_train"] == len(event) - n_test - n_val
+        with h5py.File(out_dir / "predictions_fold0.h5", "r") as f:
+            assert f.attrs["n_folds"] == 3 and f.attrs["fold_rule"] == FOLD_RULE_EVENT
+            assert (f["EVENT/event"][...] % 3 == 0).all() and len(
+                f["EVENT/event"]
+            ) == n_test
+            assert (f["EVENT/fold"][...] == 0).all()
+        # corenet-evaluate applies the checkpoint's rule, also to a file without the column
+        with h5py.File(data, "a") as f:
+            del f["EVENT/fold"]
+        metrics = evaluate.main(
+            [
+                "--checkpoint",
+                str(out_dir / "model_fold0.pkl"),
+                "--input",
+                str(data),
+                "--output",
+                str(tmp / "eval.h5"),
+            ]
+        )
+        assert metrics["n_events"] == n_test
+        with h5py.File(tmp / "eval.h5", "r") as f:
+            assert f.attrs["n_folds"] == 3 and f.attrs["fold_rule"] == FOLD_RULE_EVENT
+        assert evaluate.main(
+            [
+                "--checkpoint",
+                str(out_dir / "model_fold0.pkl"),
+                "--input",
+                str(data),
+                "--output",
+                str(tmp / "eval5.h5"),
+                "--n-folds",
+                "5",
+            ]
+        )["n_events"] == int((event % 5 == 0).sum())
+        # a checkpoint trained on the column keeps the column rule and needs it in the file
+        with_column = write_synthetic(tmp / "col.h5", "hh4b")
+        train.main(
+            [
+                "--config",
+                str(HH4B),
+                "--input",
+                str(with_column),
+                "--output-dir",
+                str(tmp / "c"),
+                "--fold",
+                "4",
+                "--exclude-folds",
+                "next",
+                "--epochs",
+                "1",
+                "--batch-size-init",
+                "128",
+                "--device",
+                "cpu",
+            ]
+        )
+        meta = _metadata(tmp / "c", fold=4)
+        assert (
+            meta["n_folds"] == 5
+            and meta["fold_rule"] == FOLD_RULE_COLUMN == "EVENT/fold"
+        )
+        assert meta["exclude_folds"] == [0]
+        with pytest.raises(KeyError, match="no EVENT/fold dataset"):
+            evaluate.main(
+                [
+                    "--checkpoint",
+                    str(tmp / "c/model_fold4.pkl"),
+                    "--input",
+                    str(data),
+                    "--output",
+                    str(tmp / "eval_c.h5"),
+                ]
+            )

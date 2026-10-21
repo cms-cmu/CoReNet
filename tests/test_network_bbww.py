@@ -31,7 +31,9 @@ def make_inputs(n=64, seed=0, pad_q=False):
         phi = math.tau * torch.rand(n, k, generator=g) - math.pi
         m = 5 + 20 * torch.rand(n, k, generator=g)
         flag = torch.ones(n, k)
-        return torch.stack([pt, eta, phi, m, flag], dim=1)                             # (n, 4+1, k): the features + flag
+        return torch.stack(
+            [pt, eta, phi, m, flag], dim=1
+        )  # (n, 4+1, k): the features + flag
 
     b, q = jets(2), jets(2)
     if pad_q:  # second q jet missing
@@ -199,10 +201,20 @@ def test_padded_leaves_stay_finite():
 
 def test_relation_needs_unique_candidates():
     cfg = {
-        "objects": {"jets": {"features": ["pt", "eta", "phi", "mass"], "max": 12}, "b": "jets btag 2", "q": "jets rest 2",
-                    "lepton": {"features": ["pt", "eta", "phi", "mass"]}, "met": {"features": ["pt", "phi"]}},
-        "hypotheses": {"HH": {"H_bb": ["b", "b"], "H_WW": {"W_had": ["q", "q"], "W_lep": ["lepton", "met"]}},
-                       "tt": {"t_had": ["b", "W_had"], "t_lep": ["b", "W_lep"]}},
+        "objects": {
+            "jets": {"features": ["pt", "eta", "phi", "mass"], "max": 12},
+            "b": "jets btag 2",
+            "q": "jets rest 2",
+            "lepton": {"features": ["pt", "eta", "phi", "mass"]},
+            "met": {"features": ["pt", "phi"]},
+        },
+        "hypotheses": {
+            "HH": {
+                "H_bb": ["b", "b"],
+                "H_WW": {"W_had": ["q", "q"], "W_lep": ["lepton", "met"]},
+            },
+            "tt": {"t_had": ["b", "W_had"], "t_lep": ["b", "W_lep"]},
+        },
         "relations": [["t_had", "met"]],
         "outputs": {"signal": "HH", "ttbar": "tt"},
         "combine": ["HH", "tt"],
@@ -290,9 +302,18 @@ def test_edge_with_many_keys_is_attention():
     """An edge whose queries have several admissible keys stays real attention: HH -> 4b dijets attending to
     the other dijets (6 candidates, diagonal masked -> 5 keys each)."""
     # btag listed as a feature here: it is one more input channel (the 5th of the 6 stacked below)
-    cfg = {"objects": {"jets": {"features": ["pt", "eta", "phi", "mass", "btag"], "max": 12}, "b": "jets btag 4", "other": "jets rest 8"},
-           "event": ["nSelJets", "HT"], "hypotheses": {"HH": {"H1": ["b", "b"], "H2": ["b", "b"], "context": "other"}},
-           "attention": [{"H1": "H1"}], "outputs": {"signal": "HH"}, "combine": ["HH"]}
+    cfg = {
+        "objects": {
+            "jets": {"features": ["pt", "eta", "phi", "mass", "btag"], "max": 12},
+            "b": "jets btag 4",
+            "other": "jets rest 8",
+        },
+        "event": ["nSelJets", "HT"],
+        "hypotheses": {"HH": {"H1": ["b", "b"], "H2": ["b", "b"], "context": "other"}},
+        "attention": [{"H1": "H1"}],
+        "outputs": {"signal": "HH"},
+        "combine": ["HH"],
+    }
     m = CoReNet(parse_config(cfg), "cpu")
     assert "H1>H1" in m.attention and not m.merge
     same = m._same("H1>H1")[0]

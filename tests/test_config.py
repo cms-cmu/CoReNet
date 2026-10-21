@@ -9,15 +9,24 @@ import pytest
 from corenet.models.config import ConfigError, parse_config
 
 HH4B = {
-    "objects": {"jets": {"features": ["pt", "eta", "phi", "mass"], "max": 12}, "b": "jets btag 4", "other": "jets rest 8"},
+    "objects": {
+        "jets": {"features": ["pt", "eta", "phi", "mass"], "max": 12},
+        "b": "jets btag 4",
+        "other": "jets rest 8",
+    },
     "event": ["nSelJets", "HT"],
     "hypotheses": {"HH": {"H1": ["b", "b"], "H2": ["b", "b"], "context": "other"}},
     "outputs": {"signal": "HH"},
     "combine": ["HH"],
 }
 BBWW = {
-    "objects": {"jets": {"features": ["pt", "eta", "phi", "mass"], "max": 12}, "b": "jets btag 2", "q": "jets rest 2",
-                "lepton": {"features": ["pt", "eta", "phi", "mass", "isE", "isM"]}, "met": {"features": ["pt", "phi"]}},
+    "objects": {
+        "jets": {"features": ["pt", "eta", "phi", "mass"], "max": 12},
+        "b": "jets btag 2",
+        "q": "jets rest 2",
+        "lepton": {"features": ["pt", "eta", "phi", "mass", "isE", "isM"]},
+        "met": {"features": ["pt", "phi"]},
+    },
     "event": ["nSelJets", "HT"],
     "hypotheses": {
         "HH": {
@@ -66,12 +75,14 @@ def test_selector_columns_are_not_features():
     assert s.selector_columns("jets") == ["btag", "pt"]
     assert s.columns_to_read("jets") == ["pt", "eta", "phi", "mass", "btag"]
     # btag listed as a feature is accepted and stays a feature (an ordinary extra input)
-    c = copy.deepcopy(HH4B); c["objects"]["jets"]["features"] = ["pt", "eta", "phi", "mass", "btag"]
+    c = copy.deepcopy(HH4B)
+    c["objects"]["jets"]["features"] = ["pt", "eta", "phi", "mass", "btag"]
     s = parse_config(c)
     assert s.collections["jets"].features == ["pt", "eta", "phi", "mass", "btag"]
     assert s.columns_to_read("jets") == ["pt", "eta", "phi", "mass", "btag"]
     # a pt selector reads pt, which a max > 1 collection always has as a feature
-    c = copy.deepcopy(HH4B); c["objects"]["b"] = "jets pt 4"
+    c = copy.deepcopy(HH4B)
+    c["objects"]["b"] = "jets pt 4"
     assert parse_config(c).columns_to_read("jets") == ["pt", "eta", "phi", "mass"]
 
 
@@ -100,50 +111,110 @@ def test_bbww_parses():
 
 def test_role_grammar():
     """<collection> <column> <n> [lowest]: any column of the file, highest first unless `lowest`; `rest` reserved."""
-    c = copy.deepcopy(HH4B); c["objects"]["b"] = "jets mass 4"
+    c = copy.deepcopy(HH4B)
+    c["objects"]["b"] = "jets mass 4"
     s = parse_config(c)
     r = s.roles["b"]
-    assert (r.selector, r.n, r.ascending, r.columns) == ("mass", 4, False, ("mass", "pt"))
-    assert s.columns_to_read("jets") == ["pt", "eta", "phi", "mass"]           # mass is a feature already
-    c = copy.deepcopy(HH4B); c["objects"]["b"] = "jets mass 4 lowest"
+    assert (r.selector, r.n, r.ascending, r.columns) == (
+        "mass",
+        4,
+        False,
+        ("mass", "pt"),
+    )
+    assert s.columns_to_read("jets") == [
+        "pt",
+        "eta",
+        "phi",
+        "mass",
+    ]  # mass is a feature already
+    c = copy.deepcopy(HH4B)
+    c["objects"]["b"] = "jets mass 4 lowest"
     r = parse_config(c).roles["b"]
     assert (r.selector, r.ascending, r.columns) == ("mass", True, ("mass", "pt"))
-    c = copy.deepcopy(HH4B); c["objects"]["b"] = "jets  dnn_score   4   lowest "
+    c = copy.deepcopy(HH4B)
+    c["objects"]["b"] = "jets  dnn_score   4   lowest "
     r = parse_config(c).roles["b"]
-    assert (r.selector, r.ascending) == ("dnn_score", True) and parse_config(c).columns_to_read("jets")[-1] == "dnn_score"
-    c = copy.deepcopy(HH4B); c["objects"]["b"] = "jets pt 4"
+    assert (r.selector, r.ascending) == ("dnn_score", True) and parse_config(
+        c
+    ).columns_to_read("jets")[-1] == "dnn_score"
+    c = copy.deepcopy(HH4B)
+    c["objects"]["b"] = "jets pt 4"
     r = parse_config(c).roles["b"]
     assert (r.selector, r.ascending, r.columns) == ("pt", False, ("pt",))
-    assert parse_config(HH4B).roles["other"].columns == ("pt",) and parse_config(HH4B).roles["b"].columns == ("btag", "pt")
-    for bad, msg in (("jets btag 4 highest", "expected '<collection> <column> <n> [lowest]'"),
-                     ("jets btag 4 Lowest", "expected '<collection> <column> <n> [lowest]'"),
-                     ("jets btag 4 lowest extra", "expected '<collection> <column> <n> [lowest]'"),
-                     ("jets rest 8 lowest", "'rest' takes no 'lowest'"),
-                     ("jets btag", "expected '<collection> <column> <n> [lowest]'"),
-                     ("jets btag four", "expected '<collection> <column> <n> [lowest]'")):
-        c = copy.deepcopy(HH4B); c["objects"]["b"] = bad; _fails(c, msg)
+    assert parse_config(HH4B).roles["other"].columns == ("pt",) and parse_config(
+        HH4B
+    ).roles["b"].columns == ("btag", "pt")
+    for bad, msg in (
+        ("jets btag 4 highest", "expected '<collection> <column> <n> [lowest]'"),
+        ("jets btag 4 Lowest", "expected '<collection> <column> <n> [lowest]'"),
+        ("jets btag 4 lowest extra", "expected '<collection> <column> <n> [lowest]'"),
+        ("jets rest 8 lowest", "'rest' takes no 'lowest'"),
+        ("jets btag", "expected '<collection> <column> <n> [lowest]'"),
+        ("jets btag four", "expected '<collection> <column> <n> [lowest]'"),
+    ):
+        c = copy.deepcopy(HH4B)
+        c["objects"]["b"] = bad
+        _fails(c, msg)
 
 
 def test_validation_rules():
-    c = copy.deepcopy(HH4B); c["combine"] = []; _fails(c, "combine must list the main hypothesis")
-    c = copy.deepcopy(HH4B); c["objects"]["b"] = "jets btag 13"; _fails(c, "within 1..max")
-    c = copy.deepcopy(HH4B); c["objects"]["b"] = "jets btag 4 highest"; _fails(c, "expected '<collection> <column> <n> [lowest]'")
-    c = copy.deepcopy(HH4B); c["objects"]["jets"]["features"] = ["eta", "phi", "mass"]; _fails(c, "need pt, eta, phi features")
-    c = copy.deepcopy(HH4B); c["hypotheses"]["HH"]["context"] = "nothing"; _fails(c, "is not a declared role")
-    c = copy.deepcopy(HH4B); c["hypotheses"]["HH"]["H1"] = ["b", "c"]; _fails(c, "neither a role")
-    c = copy.deepcopy(HH4B); c["hypotheses"]["ZZ"] = {"Z1": ["b", "b"], "Z2": ["b", "b"]}; _fails(c, "used by no output")
-    c = copy.deepcopy(HH4B); c["outputs"] = {"signal": "XX"}; _fails(c, "is not a declared hypothesis")
-    c = copy.deepcopy(HH4B); c["outputs"] = {"signal": None}; _fails(c, "main score) needs a hypothesis")
-    c = copy.deepcopy(HH4B); c["training"] = {"features": 8, "attention_heads": 3}; _fails(c, "divisible")
-    c = copy.deepcopy(HH4B); c["training"] = {"foo": 1}; _fails(c, "unknown keys")
-    c = copy.deepcopy(BBWW); c["hypotheses"]["HH"]["H_WW"]["W_lep"] = "lepton + met"; _fails(c, "the '+' form was removed; write [lepton, met]")
-    c = copy.deepcopy(BBWW); c["hypotheses"]["HH"]["H_WW"]["W_lep"] = "lepton met"; _fails(c, "cannot interpret")
-    c = copy.deepcopy(BBWW); c["hypotheses"]["tt"]["W_had"] = ["q", "b"]; _fails(c, "defined twice with different children")
-    c = copy.deepcopy(BBWW); c["attention"] = [{"W_lep": "nowhere"}]; _fails(c, "is not a node")
-    c = copy.deepcopy(BBWW); c["objects"]["q"] = "jets rest 11"; _fails(c, "slots > max")
-    c = copy.deepcopy(HH4B); del c["combine"]; _fails(c, "missing required section")
-    c = copy.deepcopy(HH4B); c["relation"] = []; _fails(c, "unknown top-level sections")
-    c = copy.deepcopy(HH4B); c["trainer"] = {"epochs": 3}; parse_config(c)       # read by corenet-train only
+    c = copy.deepcopy(HH4B)
+    c["combine"] = []
+    _fails(c, "combine must list the main hypothesis")
+    c = copy.deepcopy(HH4B)
+    c["objects"]["b"] = "jets btag 13"
+    _fails(c, "within 1..max")
+    c = copy.deepcopy(HH4B)
+    c["objects"]["b"] = "jets btag 4 highest"
+    _fails(c, "expected '<collection> <column> <n> [lowest]'")
+    c = copy.deepcopy(HH4B)
+    c["objects"]["jets"]["features"] = ["eta", "phi", "mass"]
+    _fails(c, "need pt, eta, phi features")
+    c = copy.deepcopy(HH4B)
+    c["hypotheses"]["HH"]["context"] = "nothing"
+    _fails(c, "is not a declared role")
+    c = copy.deepcopy(HH4B)
+    c["hypotheses"]["HH"]["H1"] = ["b", "c"]
+    _fails(c, "neither a role")
+    c = copy.deepcopy(HH4B)
+    c["hypotheses"]["ZZ"] = {"Z1": ["b", "b"], "Z2": ["b", "b"]}
+    _fails(c, "used by no output")
+    c = copy.deepcopy(HH4B)
+    c["outputs"] = {"signal": "XX"}
+    _fails(c, "is not a declared hypothesis")
+    c = copy.deepcopy(HH4B)
+    c["outputs"] = {"signal": None}
+    _fails(c, "main score) needs a hypothesis")
+    c = copy.deepcopy(HH4B)
+    c["training"] = {"features": 8, "attention_heads": 3}
+    _fails(c, "divisible")
+    c = copy.deepcopy(HH4B)
+    c["training"] = {"foo": 1}
+    _fails(c, "unknown keys")
+    c = copy.deepcopy(BBWW)
+    c["hypotheses"]["HH"]["H_WW"]["W_lep"] = "lepton + met"
+    _fails(c, "the '+' form was removed; write [lepton, met]")
+    c = copy.deepcopy(BBWW)
+    c["hypotheses"]["HH"]["H_WW"]["W_lep"] = "lepton met"
+    _fails(c, "cannot interpret")
+    c = copy.deepcopy(BBWW)
+    c["hypotheses"]["tt"]["W_had"] = ["q", "b"]
+    _fails(c, "defined twice with different children")
+    c = copy.deepcopy(BBWW)
+    c["attention"] = [{"W_lep": "nowhere"}]
+    _fails(c, "is not a node")
+    c = copy.deepcopy(BBWW)
+    c["objects"]["q"] = "jets rest 11"
+    _fails(c, "slots > max")
+    c = copy.deepcopy(HH4B)
+    del c["combine"]
+    _fails(c, "missing required section")
+    c = copy.deepcopy(HH4B)
+    c["relation"] = []
+    _fails(c, "unknown top-level sections")
+    c = copy.deepcopy(HH4B)
+    c["trainer"] = {"epochs": 3}
+    parse_config(c)  # read by corenet-train only
 
 
 def test_relations_and_single_object_children():
@@ -168,16 +239,24 @@ def test_relations_and_single_object_children():
     c["hypotheses"]["HH"]["H_WW"]["W_lep"] = ["l", "met"]
     c["relations"] = [["l", "met"]]
     s = parse_config(c)
-    assert s.nodes["W_lep"].children == ["l", "met"] and s.leaves()["l"].n == 1 and s.leaves()["met"].n == 1
-    c = copy.deepcopy(BBWW); c["hypotheses"]["HH"]["H_WW"]["W_lep"] = "l + met"; _fails(c, "the '+' form was removed; write [l, met]")
+    assert (
+        s.nodes["W_lep"].children == ["l", "met"]
+        and s.leaves()["l"].n == 1
+        and s.leaves()["met"].n == 1
+    )
+    c = copy.deepcopy(BBWW)
+    c["hypotheses"]["HH"]["H_WW"]["W_lep"] = "l + met"
+    _fails(c, "the '+' form was removed; write [l, met]")
 
 
 def test_min_jets():
     """min_jets (optional, default 4) sets the nSelJets offset; rejected unless an integer >= 2."""
     assert parse_config(copy.deepcopy(HH4B)).min_jets == 4
-    c = copy.deepcopy(HH4B); c["min_jets"] = 2
+    c = copy.deepcopy(HH4B)
+    c["min_jets"] = 2
     assert parse_config(c).min_jets == 2
     for bad in (1, 0, "4", True, 4.0):
-        c = copy.deepcopy(HH4B); c["min_jets"] = bad
+        c = copy.deepcopy(HH4B)
+        c["min_jets"] = bad
         with pytest.raises(ConfigError):
             parse_config(c)

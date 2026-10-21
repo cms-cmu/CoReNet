@@ -43,8 +43,24 @@ def test_valid_synthetic(tmp_path, topology):
     assert "selected by `rest` (reads pt for the selection)" in msgs
     assert "['btag'] read for the selection only (not network inputs)" in msgs
     assert "features ['pt', 'eta', 'phi', 'mass'] (the network inputs)" in msgs
-    assert ("leaf `b`: tensor (400, 5, 4)" if topology == "hh4b" else "leaf `b`: tensor (400, 5, 2)") in msgs
-    assert validate.main(["--config", str(cfg), "--input", str(data), "--json", str(tmp_path / "r.json")]) == 0
+    assert (
+        "leaf `b`: tensor (400, 5, 4)"
+        if topology == "hh4b"
+        else "leaf `b`: tensor (400, 5, 2)"
+    ) in msgs
+    assert (
+        validate.main(
+            [
+                "--config",
+                str(cfg),
+                "--input",
+                str(data),
+                "--json",
+                str(tmp_path / "r.json"),
+            ]
+        )
+        == 0
+    )
 
 
 @pytest.mark.parametrize(
@@ -81,18 +97,54 @@ BROKEN_CONFIGS = [
     ),
     (lambda c: c["objects"]["jets"].__setitem__("max", "12"), "max must be an integer"),
     (lambda c: c["objects"].__setitem__("b", "jet btag 2"), "unknown collection 'jet'"),
-    (lambda c: c["objects"].__setitem__("b", "jets btag 2 top"), "expected '<collection> <column> <n> [lowest]', got 'jets btag 2 top'"),
-    (lambda c: c["objects"].__setitem__("q", "jets rest 2 lowest"), "'rest' takes no 'lowest'"),
-    (lambda c: c["hypotheses"]["tt"].__setitem__("t_had", ["bb", "W_had"]), "child 'bb' is neither"),
-    (lambda c: c["hypotheses"]["HH"]["H_WW"].__setitem__("W_lep", "lepton + met"), "the '+' form was removed; write [lepton, met]"),
-    (lambda c: c.__setitem__("attention", [{"W_lep": "W_hadronic"}]), "'W_hadronic' is not a node"),
-    (lambda c: c.__setitem__("relations", [["lepton", "neutrino"]]), "'neutrino' is neither a node nor a leaf"),
-    (lambda c: c.__setitem__("relations", [["t_had", "met"]]), "t_had has 2 candidates"),
-    (lambda c: c.__setitem__("combine", ["tt"]), "combine must list the main hypothesis 'HH'"),
-    (lambda c: c.__setitem__("combine", ["HH", "HH"]), "combine: duplicate entries ['HH']"),
-    (lambda c: c["outputs"].__setitem__("ttbar", "ttbar"), "outputs.ttbar: 'ttbar' is not a declared hypothesis"),
-    (lambda c: c["training"].__setitem__("features", "8"), "training.features must be an integer"),
-    (lambda c: c["training"].__setitem__("features", 7), "must be divisible by training.attention_heads"),
+    (
+        lambda c: c["objects"].__setitem__("b", "jets btag 2 top"),
+        "expected '<collection> <column> <n> [lowest]', got 'jets btag 2 top'",
+    ),
+    (
+        lambda c: c["objects"].__setitem__("q", "jets rest 2 lowest"),
+        "'rest' takes no 'lowest'",
+    ),
+    (
+        lambda c: c["hypotheses"]["tt"].__setitem__("t_had", ["bb", "W_had"]),
+        "child 'bb' is neither",
+    ),
+    (
+        lambda c: c["hypotheses"]["HH"]["H_WW"].__setitem__("W_lep", "lepton + met"),
+        "the '+' form was removed; write [lepton, met]",
+    ),
+    (
+        lambda c: c.__setitem__("attention", [{"W_lep": "W_hadronic"}]),
+        "'W_hadronic' is not a node",
+    ),
+    (
+        lambda c: c.__setitem__("relations", [["lepton", "neutrino"]]),
+        "'neutrino' is neither a node nor a leaf",
+    ),
+    (
+        lambda c: c.__setitem__("relations", [["t_had", "met"]]),
+        "t_had has 2 candidates",
+    ),
+    (
+        lambda c: c.__setitem__("combine", ["tt"]),
+        "combine must list the main hypothesis 'HH'",
+    ),
+    (
+        lambda c: c.__setitem__("combine", ["HH", "HH"]),
+        "combine: duplicate entries ['HH']",
+    ),
+    (
+        lambda c: c["outputs"].__setitem__("ttbar", "ttbar"),
+        "outputs.ttbar: 'ttbar' is not a declared hypothesis",
+    ),
+    (
+        lambda c: c["training"].__setitem__("features", "8"),
+        "training.features must be an integer",
+    ),
+    (
+        lambda c: c["training"].__setitem__("features", 7),
+        "must be divisible by training.attention_heads",
+    ),
     (lambda c: c["training"].update(features=9, attention_heads=3), "must be even"),
     (
         lambda c: c["training"].__setitem__("phase_symetric", True),
@@ -135,9 +187,17 @@ def test_missing_selector_column(tmp_path):
     cfg["objects"]["b"] = "jets dnn_score 2 lowest"
     r = validate.validate(_write(tmp_path, cfg), data)
     msgs = "\n".join(m for _, _, m in r.items)
-    assert "selected by `dnn_score` lowest first (reads dnn_score, pt for the selection)" in msgs
-    assert "expects dataset INPUTS/Jets/dnn_score (read for the selection by `b`, not a feature): not found" in _errors(r)
-    cfg["objects"]["b"] = "jets mass 2 lowest"                   # a feature column: no selection-only line
+    assert (
+        "selected by `dnn_score` lowest first (reads dnn_score, pt for the selection)"
+        in msgs
+    )
+    assert (
+        "expects dataset INPUTS/Jets/dnn_score (read for the selection by `b`, not a feature): not found"
+        in _errors(r)
+    )
+    cfg["objects"]["b"] = (
+        "jets mass 2 lowest"  # a feature column: no selection-only line
+    )
     r = validate.validate(_write(tmp_path, cfg), data)
     assert not r.errors, r.errors
     assert "read for the selection only" not in "\n".join(m for _, _, m in r.items)
@@ -153,7 +213,10 @@ def test_btag_feature_is_an_input(tmp_path):
     msgs = "\n".join(m for _, _, m in r.items)
     assert "features ['pt', 'eta', 'phi', 'mass', 'btag'] (the network inputs)" in msgs
     assert "read for the selection only" not in msgs
-    assert "leaf `b`: tensor (400, 6, 2)" in msgs and "network built: 3,832 parameters" not in msgs
+    assert (
+        "leaf `b`: tensor (400, 6, 2)" in msgs
+        and "network built: 3,832 parameters" not in msgs
+    )
 
 
 def test_yaml_syntax_error(tmp_path):
@@ -177,21 +240,70 @@ def _replace(f, name, data):
 
 
 BROKEN_FILES = [
-    (lambda f: f.move("INPUTS/Lepton", "INPUTS/Electron"), "collection `lepton` (used by `lepton`) expects a group INPUTS/lepton or INPUTS/Lepton or INPUTS/Leptons: not found"),
-    (lambda f: f.__delitem__("INPUTS/Lepton/isE"), "expects dataset INPUTS/Lepton/isE: not found"),
-    (lambda f: _replace(f, "INPUTS/Jets/pt", f["INPUTS/Jets/pt"][:, :10]), "INPUTS/Jets/pt: 10 slots, the configuration asks for max 12"),
-    (lambda f: _replace(f, "INPUTS/Met/pt", f["INPUTS/Met/pt"][:-5]), "INPUTS/Met/pt has 395 entries, expected 400"),
-    (lambda f: _replace(f, "INPUTS/Lepton/pt", np.stack([f["INPUTS/Lepton/pt"][...]] * 2, 1)), "expected (events,) for a single-object collection"),
-    (lambda f: _replace(f, "INPUTS/Jets/btag", np.array(["x"] * 400, dtype="S1")), "INPUTS/Jets/btag: dtype |S1 is not numeric"),
-    (lambda f: f.__delitem__("INPUTS/Jets/btag"), "expects dataset INPUTS/Jets/btag (read for the selection by `b`, not a feature): not found"),
-    (lambda f: _replace(f, "INPUTS/Jets/btag", f["INPUTS/Jets/btag"][:, :10]), "INPUTS/Jets/btag: 10 slots, the configuration asks for max 12"),
-    (lambda f: _replace(f, "INPUTS/Jets/MASK", f["INPUTS/Jets/MASK"][:, :11]), "INPUTS/Jets/MASK: shape (400, 11), expected (400, 12)"),
-    (lambda f: _replace(f, "EVENT/label", np.full(400, 3)), "EVENT/label: labels [3] outside 0..2"),
-    (lambda f: _replace(f, "EVENT/label", np.full(400, 1.0)), "EVENT/label: shape (400,) dtype float64, expected integer"),
-    (lambda f: f.__delitem__("EVENT/label"), "no labels: expected EVENT/label or CLASSIFICATIONS/EVENT/signal"),
-    (lambda f: f.__delitem__("EVENT/fold"), "EVENT/fold not found: corenet-train needs a fold index"),
-    (lambda f: _replace(f, "EVENT/weight", np.full(400, np.nan, dtype=np.float32)), "EVENT/weight: 400 non-finite weights"),
-    (lambda f: _replace(f, "INPUTS/Lepton/pt", np.full(400, np.inf, dtype=np.float32)), "leaf `lepton`: non-finite features in 400 present objects"),
+    (
+        lambda f: f.move("INPUTS/Lepton", "INPUTS/Electron"),
+        "collection `lepton` (used by `lepton`) expects a group INPUTS/lepton or INPUTS/Lepton or INPUTS/Leptons: not found",
+    ),
+    (
+        lambda f: f.__delitem__("INPUTS/Lepton/isE"),
+        "expects dataset INPUTS/Lepton/isE: not found",
+    ),
+    (
+        lambda f: _replace(f, "INPUTS/Jets/pt", f["INPUTS/Jets/pt"][:, :10]),
+        "INPUTS/Jets/pt: 10 slots, the configuration asks for max 12",
+    ),
+    (
+        lambda f: _replace(f, "INPUTS/Met/pt", f["INPUTS/Met/pt"][:-5]),
+        "INPUTS/Met/pt has 395 entries, expected 400",
+    ),
+    (
+        lambda f: _replace(
+            f, "INPUTS/Lepton/pt", np.stack([f["INPUTS/Lepton/pt"][...]] * 2, 1)
+        ),
+        "expected (events,) for a single-object collection",
+    ),
+    (
+        lambda f: _replace(f, "INPUTS/Jets/btag", np.array(["x"] * 400, dtype="S1")),
+        "INPUTS/Jets/btag: dtype |S1 is not numeric",
+    ),
+    (
+        lambda f: f.__delitem__("INPUTS/Jets/btag"),
+        "expects dataset INPUTS/Jets/btag (read for the selection by `b`, not a feature): not found",
+    ),
+    (
+        lambda f: _replace(f, "INPUTS/Jets/btag", f["INPUTS/Jets/btag"][:, :10]),
+        "INPUTS/Jets/btag: 10 slots, the configuration asks for max 12",
+    ),
+    (
+        lambda f: _replace(f, "INPUTS/Jets/MASK", f["INPUTS/Jets/MASK"][:, :11]),
+        "INPUTS/Jets/MASK: shape (400, 11), expected (400, 12)",
+    ),
+    (
+        lambda f: _replace(f, "EVENT/label", np.full(400, 3)),
+        "EVENT/label: labels [3] outside 0..2",
+    ),
+    (
+        lambda f: _replace(f, "EVENT/label", np.full(400, 1.0)),
+        "EVENT/label: shape (400,) dtype float64, expected integer",
+    ),
+    (
+        lambda f: f.__delitem__("EVENT/label"),
+        "no labels: expected EVENT/label or CLASSIFICATIONS/EVENT/signal",
+    ),
+    (
+        lambda f: f.__delitem__("EVENT/fold"),
+        "EVENT/fold not found: corenet-train needs a fold index",
+    ),
+    (
+        lambda f: _replace(f, "EVENT/weight", np.full(400, np.nan, dtype=np.float32)),
+        "EVENT/weight: 400 non-finite weights",
+    ),
+    (
+        lambda f: _replace(
+            f, "INPUTS/Lepton/pt", np.full(400, np.inf, dtype=np.float32)
+        ),
+        "leaf `lepton`: non-finite features in 400 present objects",
+    ),
 ]
 
 
@@ -219,3 +331,52 @@ def test_missing_event_scalar_and_warnings(tmp_path):
     )
     w = "\n".join(r.warnings)
     assert "EVENT/weight not found" in w and "INPUTS/Jets/MASK not found" in w
+
+
+def test_fold_report(tmp_path):
+    """The fold source and the events per fold; --n-folds reports the event % K split instead."""
+    data = write_synthetic(tmp_path / "d.h5", "bbww", n=400)
+    r = validate.validate(BBWW, data)
+    msgs = "\n".join(m for _, _, m in r.items)
+    assert not r.errors and "folds from EVENT/fold: events per fold {0: " in msgs
+    assert "--n-folds" not in msgs
+    # the synthetic folds are random: event % 5 disagrees with the column for most events
+    r = validate.validate(BBWW, data, n_folds=5)
+    msgs = "\n".join(m for _, _, m in r.items)
+    assert not r.errors, r.errors
+    assert "folds from event % 5 (--n-folds): events per fold {0: " in msgs
+    assert "EVENT/fold disagrees with event % 5 for " in "\n".join(r.warnings)
+    assert "loader + forward pass" in msgs
+    # a column equal to the rule
+    with h5py.File(data, "a") as f:
+        _replace(f, "EVENT/fold", f["EVENT/event"][...] % 5)
+    r = validate.validate(BBWW, data, n_folds=5)
+    assert not r.errors and "EVENT/fold equals event % 5" in "\n".join(
+        m for _, _, m in r.items
+    )
+    assert not r.warnings, r.warnings
+    # no column: FAIL by default (see BROKEN_FILES), valid with --n-folds
+    with h5py.File(data, "a") as f:
+        del f["EVENT/fold"]
+    r = validate.validate(BBWW, data)
+    assert "EVENT/fold not found" in _errors(r) and "pass --n-folds K" in _errors(r)
+    assert (
+        validate.main(["--config", str(BBWW), "--input", str(data), "--n-folds", "3"])
+        == 0
+    )
+    r = validate.validate(BBWW, data, n_folds=3)
+    msgs = "\n".join(m for _, _, m in r.items)
+    assert (
+        not r.errors
+        and "folds from event % 3 (--n-folds): events per fold {0: 134, 1: 133, 2: 133}"
+        in msgs
+    )
+    # negative event numbers cannot be folded
+    with h5py.File(data, "a") as f:
+        _replace(f, "EVENT/event", f["EVENT/event"][...] - 10)
+    r = validate.validate(BBWW, data, n_folds=3)
+    assert "folds = event % 3 (--n-folds): 10 event numbers are negative" in _errors(r)
+    with h5py.File(data, "a") as f:
+        del f["EVENT/event"]
+    r = validate.validate(BBWW, data, n_folds=3)
+    assert "folds = event % 3 (--n-folds): EVENT/event not found" in _errors(r)
