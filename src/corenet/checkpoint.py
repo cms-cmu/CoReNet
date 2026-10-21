@@ -4,7 +4,8 @@
  "config":   the configuration mapping the network was built from (so a checkpoint is self-contained),
  "config_path": path of the configuration file at training time,
  "classes":  ["rest", <outputs>...],
- "metadata": {"fold", "epoch", "exclude_folds", "input", <training recipe>},
+ "metadata": {"fold", "epoch", "exclude_folds", "input", "n_folds", "fold_rule" ("EVENT/fold" or
+             "event % n_folds"), <training recipe>, "finetune_trainable_parameters"},
  "format":   CHECKPOINT_FORMAT}
 
 ``format`` 2: every feature of a collection is a network input. Checkpoints without ``format`` were
@@ -21,11 +22,20 @@ from pathlib import Path
 
 import torch
 
+from .data.h5 import FOLD_RULE_EVENT
 from .models.config import NetworkSpec, parse_config, read_config_dict
 from .models.network import CoReNet
 
 CHECKPOINT_FORMAT = 2
-LEGACY_SKIPPED = ("btag",)          # features the network ignored before format 2
+LEGACY_SKIPPED = ("btag",)  # features the network ignored before format 2
+
+
+def n_folds_of(metadata: dict) -> int | None:
+    """The ``n_folds`` to pass to ``H5Dataset`` for a checkpoint: its ``n_folds`` when it was trained with
+    fold = event % n_folds, else None (the ``EVENT/fold`` column)."""
+    if metadata.get("fold_rule") == FOLD_RULE_EVENT:
+        return metadata.get("n_folds")
+    return None
 
 
 def save_checkpoint(
@@ -76,8 +86,10 @@ def load_checkpoint(
         if "format" not in ckpt:
             cfg, edited = legacy_config(cfg)
             if edited:
-                logging.info(f"{path}: checkpoint written before format {CHECKPOINT_FORMAT}; "
-                             f"{list(LEGACY_SKIPPED)} dropped from the features of {edited} (the network never used them)")
+                logging.info(
+                    f"{path}: checkpoint written before format {CHECKPOINT_FORMAT}; "
+                    f"{list(LEGACY_SKIPPED)} dropped from the features of {edited} (the network never used them)"
+                )
     else:
         raise ValueError(
             f"{path}: the checkpoint stores no configuration; pass the configuration file explicitly"
@@ -89,13 +101,23 @@ def load_checkpoint(
     except RuntimeError as e:
         hint = ""
         if "format" not in ckpt and config is not None:
-            hint = (f"; the checkpoint predates format {CHECKPOINT_FORMAT}, in which every feature is a network input: "
-                    f"if the network was trained with {list(LEGACY_SKIPPED)} listed under features, remove them from "
-                    f"the features of {config} (or load without --config, which does so automatically)")
-        raise RuntimeError(f"{path}: the state dict does not fit the network built from the configuration{hint}\n{e}") from e
+            hint = (
+                f"; the checkpoint predates format {CHECKPOINT_FORMAT}, in which every feature is a network input: "
+                f"if the network was trained with {list(LEGACY_SKIPPED)} listed under features, remove them from "
+                f"the features of {config} (or load without --config, which does so automatically)"
+            )
+        raise RuntimeError(
+            f"{path}: the state dict does not fit the network built from the configuration{hint}\n{e}"
+        ) from e
     model.eval()
     model.setGhostBatches(0)
     return model, spec, ckpt
 
 
-__all__ = ["save_checkpoint", "load_checkpoint", "legacy_config", "CHECKPOINT_FORMAT"]
+__all__ = [
+    "CHECKPOINT_FORMAT",
+    "legacy_config",
+    "load_checkpoint",
+    "n_folds_of",
+    "save_checkpoint",
+]
