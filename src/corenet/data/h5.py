@@ -20,7 +20,8 @@ information is read: the roles are chosen from reconstructed quantities only.
 A collection's ``features`` are exactly the channels of its tensors. A selector reads the column it
 needs (its column and ``pt``) from the file on its own, whether or not it is a feature; such a column
 is used for the selection only (``columns_to_read``). A column listed under ``features`` is always a
-network input, ``btag`` included.
+network input, ``btag`` included. Columns are read at the file's dtype and sorted at that precision;
+they are cast to float32 only when the input tensors are built.
 
     ds = H5Dataset("examples/data/bbww_small.h5", load_config("examples/bbww/bbww.yaml"))
     out = model(ds.inputs)
@@ -111,11 +112,22 @@ def resolve_group(f: h5py.File, name: str) -> str:
     )
 
 
+def _sortable(a: np.ndarray) -> np.ndarray:
+    """A column as read from the file, in a dtype that sorts exactly and can be negated: floats and
+    signed integers unchanged, bool -> int8, unsigned integers -> int64."""
+    if a.dtype.kind == "b":
+        return a.astype(np.int8)
+    if a.dtype.kind == "u":
+        return a.astype(np.int64)
+    return a
+
+
 def _read_collection(
     f: h5py.File, coll: Collection, columns: list[str]
 ) -> tuple[dict[str, np.ndarray], np.ndarray]:
     """(columns, present) of one collection, both shaped (N, slots in the file); ``columns`` are the
-    features plus the selector columns (``columns_to_read``)."""
+    features plus the selector columns (``columns_to_read``), at the file's dtype (``_sortable``) so that
+    the selectors sort at full precision; ``_stack`` casts to float32."""
     group = f["INPUTS"][resolve_group(f, coll.name)]
     missing = [k for k in columns if k not in group]
     if missing:
@@ -123,7 +135,7 @@ def _read_collection(
             f"collection {coll.name!r} (INPUTS/{group.name.split('/')[-1]}): missing columns {missing} "
             f"(features {coll.features}, selector columns {[c for c in columns if c not in coll.features]})"
         )
-    feats = {k: np.atleast_2d(group[k][...].astype(np.float32).T).T for k in columns}
+    feats = {k: np.atleast_2d(_sortable(group[k][...]).T).T for k in columns}
     n, slots = feats[columns[0]].shape
     if coll.max > 1 and slots < coll.max:
         raise ValueError(
@@ -273,13 +285,13 @@ class H5Dataset(Dataset):
         idx: np.ndarray,
         valid: np.ndarray,
     ) -> torch.Tensor:
-        """(N, len(features) + 1, n): features in configuration order, presence flag last, padding -1.
-        Columns read only for a selector are not stacked."""
+        """(N, len(features) + 1, n): features in configuration order, presence flag last, padding -1;
+        float32 (the columns are cast here). Columns read only for a selector are not stacked."""
         n, slots = idx.shape
         rows = np.arange(n)[:, None]
         x = np.full((n, len(coll.features) + 1, slots), -1.0, dtype=np.float32)
         for i, k in enumerate(coll.features):
-            x[:, i] = np.where(valid, feats[k][rows, idx], -1.0)
+            x[:, i] = np.where(valid, feats[k][rows, idx], -1.0).astype(np.float32)
         x[:, -1] = np.where(valid, 1.0, -1.0)
         return torch.from_numpy(x)
 

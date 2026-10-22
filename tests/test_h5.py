@@ -445,3 +445,45 @@ def test_missing_fold_column(tmp_path):
         del g["EVENT/event"]
     with pytest.raises(KeyError, match="no EVENT/event dataset"):
         H5Dataset(dst, spec, n_folds=5)
+
+
+def test_selector_sorts_at_file_precision(tmp_path):
+    """Selector columns are compared at the file's dtype: an int64 column with 16777216 and 16777217 (equal
+    once cast to float32) selects the higher one; unsigned and bool columns sort by value too (no wrap-around
+    on negation). The input tensors stay float32."""
+    from synthetic import write_synthetic
+
+    path = write_synthetic(tmp_path / "s.h5", "hh4b", n=300)
+    with h5py.File(path, "a") as f:
+        mask = f["INPUTS/Source/MASK"][...]
+        pt = f["INPUTS/Source/pt"][...]
+        n, slots = mask.shape
+        assert mask[:, :2].all()  # jets 0 and 1 are present in every event (>= 4 jets)
+        rank = np.zeros((n, slots), dtype=np.int64)
+        rank[:, 0], rank[:, 1] = 16777216, 16777217
+        f.create_dataset("INPUTS/Source/rank", data=rank)
+        low = np.full((n, slots), 2**40, dtype=np.int64)
+        low[:, 0], low[:, 1] = 16777216, 16777217
+        f.create_dataset("INPUTS/Source/low", data=low)
+        urank = np.zeros((n, slots), dtype=np.uint8)
+        urank[:, 1] = 7  # jet 0 has 0: -0 wraps to 0 and would be preferred by a wrapped negation
+        f.create_dataset("INPUTS/Source/urank", data=urank)
+        flag = np.zeros((n, slots), dtype=bool)
+        flag[:, 1] = True
+        f.create_dataset("INPUTS/Source/flag", data=flag)
+    for column, kind in (("rank", "int64"), ("urank", "uint8"), ("flag", "bool")):
+        cfg = _hh4b_cfg(["pt", "eta", "phi", "mass"])
+        cfg["objects"]["b"] = f"jets {column} 4"
+        x = H5Dataset(path, parse_config(cfg)).inputs
+        assert x["b"].dtype == torch.float32 and x["b"].shape == (n, 5, 4)
+        assert np.array_equal(x["b"][:, 0, 0].numpy(), pt[:, 1]), (
+            f"{kind} column: jet 1 has the highest value"
+        )
+        if column == "rank":  # 16777216 > 0: jet 0 is second
+            assert np.array_equal(x["b"][:, 0, 1].numpy(), pt[:, 0])
+    cfg = _hh4b_cfg(["pt", "eta", "phi", "mass"])
+    cfg["objects"]["b"] = "jets low 4 lowest"
+    x = H5Dataset(path, parse_config(cfg)).inputs
+    assert np.array_equal(x["b"][:, 0, 0].numpy(), pt[:, 0])  # the lowest: 16777216 is jet 0
+    assert np.array_equal(x["b"][:, 0, 1].numpy(), pt[:, 1])
+    # the b-jet selection of the example files is unchanged (float32 in the file): test_hh4b_small / test_bbww_small
