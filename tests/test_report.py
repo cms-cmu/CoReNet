@@ -24,7 +24,10 @@ def _add_targets(path: Path) -> None:
     with h5py.File(path, "a") as f:
         label = f["EVENT/label"][...]
         n_present = f["INPUTS/Source/MASK"][...].sum(1)
-        cols = {k: np.full(len(label), -1, dtype=np.int64) for k in ("h1/b1", "h1/b2", "h2/b1", "h2/b2")}
+        cols = {
+            k: np.full(len(label), -1, dtype=np.int64)
+            for k in ("h1/b1", "h1/b2", "h2/b1", "h2/b2")
+        }
         for i in np.flatnonzero(label == 1):
             slots = rng.choice(int(n_present[i]), 4, replace=False)
             for k, s in zip(cols, slots):
@@ -50,7 +53,15 @@ def _evaluate_all(out_dir: Path, data: Path) -> None:
 
 def _report(out_dir: Path, data: Path, *extra: str) -> str:
     out = report.main(
-        ["--run-dir", str(out_dir), "--input", str(data), "--output", str(out_dir / "report.html"), *extra]
+        [
+            "--run-dir",
+            str(out_dir),
+            "--input",
+            str(data),
+            "--output",
+            str(out_dir / "report.html"),
+            *extra,
+        ]
     )
     assert out.is_file(), out
     assert out.stat().st_size < MAX_BYTES, out.stat().st_size
@@ -135,4 +146,13 @@ def test_report_needs_a_run_directory() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         with pytest.raises(SystemExit):
-            report.main(["--run-dir", tmp, "--input", str(HH4B), "--output", str(Path(tmp) / "r.html")])
+            report.main(
+                [
+                    "--run-dir",
+                    tmp,
+                    "--input",
+                    str(HH4B),
+                    "--output",
+                    str(Path(tmp) / "r.html"),
+                ]
+            )
