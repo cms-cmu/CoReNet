@@ -1,4 +1,5 @@
 # CoReNet: Combinatorial Residual Network
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23577720.svg)](https://doi.org/10.5281/zenodo.23577720)
 
 [![CI](https://github.com/cms-cmu/CoReNet/actions/workflows/ci.yml/badge.svg)](https://github.com/cms-cmu/CoReNet/actions/workflows/ci.yml)
 
@@ -269,4 +270,7 @@ class_probabilities, views_HH = sess.run(None, feeds)
 
 If you use this software for a publication, please cite it as given in [CITATION.cff](CITATION.cff)
 (to be completed) and the paper describing the method: [paper reference / arXiv to be added].
+The software is archived on Zenodo with the concept DOI
+[10.5281/zenodo.23577720](https://doi.org/10.5281/zenodo.23577720) (version 1.0.0:
+10.5281/zenodo.23577721); [CITATION.cff](CITATION.cff) holds the citation.
 Released under the MIT licence ([LICENSE](LICENSE)).
