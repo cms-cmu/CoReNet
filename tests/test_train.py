@@ -472,6 +472,33 @@ def test_finetune_batch_size_divisor() -> None:
         assert np.isfinite(e1["train_loss"]) and 0.0 <= e1["val_auc"] <= 1.0
 
 
+def test_finetune_layers_must_match() -> None:
+    """finetune_layers prefixes that match no parameter at all would freeze everything: an error naming them
+    and the prefixes that exist, raised before the first epoch. One unmatched prefix among matching ones is
+    allowed (the default `head_reduce.` / `aux_heads.` match nothing in the HH -> 4b network)."""
+    with tempfile.TemporaryDirectory(prefix="corenet_ft_") as tmp:
+        tmp = Path(tmp)
+        data = write_synthetic(tmp / "hh4b_all.h5", "hh4b")
+        with pytest.raises(
+            ConfigError,
+            match=r"finetune_layers: \['nosuch\.'\] match no trainable parameter.*'head_main\.'.*'none' freezes nothing",
+        ):
+            _train(data, tmp / "bad", "--finetune-layers", "nosuch.")
+        assert not (tmp / "bad" / "history_fold0.json").exists()
+        h = _train(data, tmp / "mixed", "--finetune-layers", "head_main.", "nosuch.")
+        assert h["finetune_trainable_parameters"] == 18  # head_main of the 4b network
+    model = CoReNet(load_config(HH4B), device="cpu")
+    train.check_finetune_layers(model, train.HEAD_PREFIXES)
+    train.check_finetune_layers(model, ["head_main.", "nosuch."])
+    with pytest.raises(
+        ConfigError, match=r"\['nosuch\.', 'typo'\] match no trainable parameter"
+    ):
+        train.check_finetune_layers(model, ["nosuch.", "typo"])
+    with pytest.raises(ConfigError, match="nosuch"):
+        train.freeze_heads(model, ["nosuch."])
+    assert train.count_trainable(model) > 0  # nothing was frozen by the failed call
+
+
 def test_file_without_folds() -> None:
     """A file with neither EVENT/fold nor --n-folds: training stops with a clear message, corenet-evaluate
     needs --fold -1 (every event; the output carries fold -1) and corenet-export works."""

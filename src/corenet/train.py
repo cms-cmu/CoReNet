@@ -121,15 +121,35 @@ def finetune_batch(epoch: int, bs_init: int, finetune_batch_size: int | None):
     return bs, ghost_batches(bs, n_gb)
 
 
+def check_finetune_layers(model: CoReNet, prefixes) -> None:
+    """At least one ``finetune_layers`` prefix must match a trainable parameter name; otherwise the fine-tuning
+    stage would freeze everything. Raises ConfigError naming the prefixes and the prefixes that exist. A single
+    prefix that matches nothing is allowed: the default ``head_reduce.`` and ``aux_heads.`` exist only in
+    networks with several combined pixels or auxiliary heads."""
+    names = [n for n, p in model.named_parameters() if p.requires_grad]
+    if not any(n.startswith(p) for p in prefixes for n in names):
+        valid = sorted({n.split(".")[0] + "." for n in names})
+        raise ConfigError(
+            f"finetune_layers: {list(prefixes)} match no trainable parameter (the fine-tuning stage would train "
+            f"nothing); parameter names start with {valid}, e.g. {names[:3]}; '{NO_FINETUNE_LAYERS}' freezes nothing"
+        )
+
+
 def freeze_heads(model: CoReNet, prefixes=HEAD_PREFIXES) -> int:
     """Freeze every parameter whose name does not start with one of ``prefixes`` (default: the output heads
     head_main, head_reduce, aux_heads); parameters that are non-trainable by construction stay so.
-    Returns the number of trainable parameters."""
+    Returns the number of trainable parameters; raises ConfigError when none is left."""
     prefixes = tuple(prefixes)
+    check_finetune_layers(model, prefixes)  # names the prefixes that match nothing
     for name, param in model.named_parameters():
         if not name.startswith(prefixes):
             param.requires_grad = False
-    return count_trainable(model)
+    n = count_trainable(model)
+    if n == 0:
+        raise ConfigError(
+            f"finetune_layers {list(prefixes)}: no trainable parameter is left for the fine-tuning stage"
+        )
+    return n
 
 
 def count_trainable(model: torch.nn.Module) -> int:
@@ -268,6 +288,8 @@ def train_fold(
     logging.info(
         f"{args.config}: classes {spec.classes}, {count_parameters(model):,} parameters"
     )
+    if args.finetune_layers:
+        check_finetune_layers(model, args.finetune_layers)
     data = Batches(ds, device)
     w_dev = weights.to(device)
     aux, head_weights = aux_targets(spec), dict(spec.training.head_weights or {})
