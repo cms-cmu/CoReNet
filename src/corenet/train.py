@@ -96,7 +96,7 @@ def batch_schedule(epoch: int, bs_init: int) -> tuple[int, int]:
     )
     bs = bs_init << stage
     n_gb = (64, 16, 4, 1, 0)[stage]
-    return bs, min(n_gb, max(1, bs // MIN_GHOST_BATCH_SIZE))  # no-op for bs_init >= 512
+    return bs, ghost_batches(bs, n_gb)  # equals the stage's count for any power-of-two batch size >= 512
 
 
 def ghost_batches(bs: int, cap: int) -> int:

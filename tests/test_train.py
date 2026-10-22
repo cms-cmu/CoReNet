@@ -179,6 +179,27 @@ def check_freeze(config: Path, expected_params: int) -> None:
     assert 0 < n_trainable < expected_params
 
 
+def test_batch_schedule_divides_any_batch_size() -> None:
+    """The ghost-batch count of the regular schedule divides the batch size for any --batch-size-init."""
+    assert [train.batch_schedule(e, 300) for e in (0, 1, 3, 6, 10)] == [
+        (300, 30),
+        (600, 15),
+        (1200, 4),
+        (2400, 1),
+        (4800, 0),
+    ]
+    for bs_init in (64, 100, 300, 1000, 1500):
+        for e in range(12):
+            bs, n_gb = train.batch_schedule(e, bs_init)
+            assert n_gb == 0 or (bs % n_gb == 0 and bs // n_gb >= train.MIN_GHOST_BATCH_SIZE), (bs_init, e, bs, n_gb)
+    for k in range(6, 13):                      # powers of two: unchanged from the original schedule
+        bs_init = 1 << k
+        for e in range(12):
+            bs, n_gb = train.batch_schedule(e, bs_init)
+            stage = 0 if e == 0 else 1 if e < 3 else 2 if e < 6 else 3 if e < 10 else 4
+            assert n_gb == min((64, 16, 4, 1, 0)[stage], max(1, bs // train.MIN_GHOST_BATCH_SIZE))
+
+
 def test_batch_schedule() -> None:
     assert [train.batch_schedule(e, 1024) for e in (0, 1, 3, 6, 10)] == [
         (1024, 64),
