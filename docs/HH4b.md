@@ -184,7 +184,7 @@ of the b jets has to be reproduced wherever the model is deployed; see Exporting
 | epochs, learning rate, decay | `--epochs`, `--lr`, `--lr-milestones`, `--lr-gamma`, `--freeze-epoch`, or the `trainer:` section | `--epochs 30 --lr-milestones 25 26 27 28 29 --freeze-epoch 25` |
 | batch size | `--batch-size-init` or `trainer: batch_size_init` | |
 | seed | `--seed` or `trainer: seed` | fold k uses seed + k |
-| validation / test folds | `--fold`, `--exclude-folds` (`next` = the fold after the held-out one), `--n-folds` (fold = `event % K` instead of `EVENT/fold`) | Training above |
+| validation / test folds | `--fold`, `--exclude-folds` (`next` = the fold after the held-out one), `--n-folds` (fold = `squares(event) % K` instead of `EVENT/fold`), `--fold-seed` | Training above |
 
 A change in `objects` or `training:` gives a different network: validate the new file with
 `corenet-validate` and retrain ([Options.md](./Options.md)).

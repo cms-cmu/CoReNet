@@ -45,9 +45,10 @@ which the validation rejects.
 
 Other flags of `corenet-train`: `--config`, `--input`, `--output-dir`, `--fold` (held-out fold, `-1`
 for every fold in turn), `--exclude-folds` (validation folds; `next` = the fold `(k + 1) % n_folds` of
-the held-out fold `k`), `--n-folds K` (fold = `event % K` from `EVENT/event` instead of the `EVENT/fold`
-column, [Dataset.md](./Dataset.md)), `--save-every-epoch` (also save `model_fold{k}_epoch{e}.pkl` after
-every epoch) and `--device`.
+the held-out fold `k`), `--n-folds K` (fold = `squares(event) % K` from `EVENT/event` instead of the
+`EVENT/fold` column, [Dataset.md](./Dataset.md)), `--fold-seed` (seed of that rule, default 0, the seed
+of the example files), `--save-every-epoch` (also save `model_fold{k}_epoch{e}.pkl` after every epoch)
+and `--device`.
 
 ## Fixed in code
 
