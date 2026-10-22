@@ -85,17 +85,19 @@ A collection named `x` is read from `INPUTS/x`, matched case-insensitively, or f
 
 ## Example
 
-The example files `examples/data/hh4b_small.h5` and `examples/data/bbww_small.h5` (20,000 events each)
-follow this layout:
+The example files `examples/data/hh4b_small.h5`, `examples/data/bbww_small.h5` and
+`examples/data/tth_small.h5` (20,000 events each) follow this layout:
 
 * `hh4b`: jets in `INPUTS/Source` (12 slots: `pt eta phi mass btag MASK`, `btag` is 0 or 1), labels in
   `CLASSIFICATIONS/EVENT/signal` (0 multijet, 1 HH), `EVENT/weight`, `EVENT/fold` (5 folds),
   `EVENT/event`;
 * `bbww`: jets in `INPUTS/Jets` (12 slots), `INPUTS/Lepton` (`pt eta phi mass isE isM`), `INPUTS/Met`
   (`pt phi`), labels in `EVENT/label` (1 HH, 2 tt̄; no class 0), `EVENT/weight`, `EVENT/fold`,
-  `EVENT/event`.
+  `EVENT/event`;
+* `tth`: the layout of `bbww` without `TARGETS` groups, at least 6 jets per event, labels in
+  `EVENT/label` (1 ttH, 0 tt̄).
 
-They are random subsamples of the full files `hh4b_all.h5` and `bbww_all.h5`, written with
+They are random subsamples of the full files `hh4b_all.h5`, `bbww_all.h5` and `tth_all.h5`, written with
 `python scripts/make_small_h5.py <full> <small> --events 20000`. Their `EVENT/fold` column equals the
 fold rule with 5 folds and seed 0 (`--n-folds 5 --fold-seed 0`), so the column and `--n-folds 5`
 give the same folds on these files; `corenet-validate --n-folds 5` reports that agreement. Check any
