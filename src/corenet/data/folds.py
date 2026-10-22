@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable
+from typing import Union
 
 import numpy as np
 
 _UINT64_32 = np.uint64(32)
 
-SeedLike = int | str | Iterable[int | str]
+# a runtime alias (not an annotation): typing.Union, so that the module imports on Python 3.9
+SeedLike = Union[int, str, Iterable[Union[int, str]]]
 
 
 def _str_to_entropy(text: str) -> list[np.uint64]:
