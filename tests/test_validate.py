@@ -68,6 +68,7 @@ def test_valid_synthetic(tmp_path, topology):
     [
         (HH4B, "hh4b_small.h5"),
         (BBWW, "bbww_small.h5"),
+        (repo / "examples/tth/tth.yaml", "tth_small.h5"),
         (repo / "examples/hh4b/hh4b_hyperparameters.yaml", "hh4b_small.h5"),
         (repo / "examples/bbww/bbww_hyperparameters.yaml", "bbww_small.h5"),
     ],
