@@ -12,8 +12,9 @@ One loader serves every topology: it reads the collections named in the configur
 
 plus ``labels`` (``EVENT/label``, or ``CLASSIFICATIONS/EVENT/signal`` when absent), ``weights``
 (``EVENT/weight``), ``folds`` and ``events`` (``EVENT/event``). The cross-validation fold of an event
-is ``EVENT/fold`` by default; with ``n_folds`` it is ``fold_of(event, n_folds)`` = ``event % n_folds``
-computed from the event numbers, and the file needs no ``EVENT/fold`` column. No generator-level
+is ``EVENT/fold`` by default; with ``n_folds`` it is ``fold_of(event, n_folds, fold_seed)`` =
+``squares(event) % n_folds`` (``corenet.data.folds``) computed from the event numbers, and the file
+needs no ``EVENT/fold`` column. No generator-level
 information is read: the roles are chosen from reconstructed quantities only.
 
 A collection's ``features`` are exactly the channels of its tensors. A selector reads the column it
@@ -48,6 +49,7 @@ import torch
 from torch.utils.data import Dataset
 
 from ..models.config import REST, Collection, NetworkSpec, RoleSpec
+from .folds import FOLD_SEED, fold_of, fold_rule
 
 # collection name (lower case) -> group names accepted in INPUTS, in order of preference
 GROUP_ALIASES = {
@@ -63,27 +65,9 @@ LABEL_KEYS = (
 )  # first one present is used
 WEIGHT_KEY, FOLD_KEY, EVENT_KEY = "EVENT/weight", "EVENT/fold", "EVENT/event"
 FOLD_RULE_EVENT, FOLD_RULE_COLUMN = (
-    "event % n_folds",
+    "squares(event) % n_folds",
     "EVENT/fold",
 )  # H5Dataset.fold_rule
-
-
-def fold_of(event: np.ndarray, n_folds: int) -> np.ndarray:
-    """The fold rule: fold = event % n_folds on the (non-negative, int64) event numbers."""
-    if not isinstance(n_folds, int) or isinstance(n_folds, bool) or n_folds < 1:
-        raise ValueError(f"n_folds must be an integer >= 1, got {n_folds!r}")
-    event = np.asarray(event)
-    if event.dtype.kind not in "iu":
-        raise ValueError(
-            f"event numbers must be integers to compute fold = event % n_folds, got dtype {event.dtype}"
-        )
-    event = event.astype(np.int64)
-    if (event < 0).any():
-        raise ValueError(
-            f"{int((event < 0).sum()):,} event numbers are negative (or exceed int64): "
-            "fold = event % n_folds needs event numbers >= 0"
-        )
-    return event % n_folds
 
 
 # ------------------------------------------------------------------ what the loader reads (shared with corenet-validate)
@@ -181,8 +165,10 @@ class H5Dataset(Dataset):
         spec: NetworkSpec,
         rest_order: str = "pt",
         n_folds: int | None = None,
+        fold_seed: int = FOLD_SEED,
     ):
-        """``n_folds``: use fold = event % n_folds (``fold_of``) instead of the ``EVENT/fold`` column."""
+        """``n_folds``: use fold = squares(event) % n_folds (``fold_of``, seed ``fold_seed``) instead of the
+        ``EVENT/fold`` column."""
         if rest_order not in ("pt", "selector"):
             raise ValueError(
                 f"rest_order must be 'pt' or 'selector', got {rest_order!r}"
@@ -226,6 +212,7 @@ class H5Dataset(Dataset):
                 if EVENT_KEY in f
                 else torch.arange(n, dtype=torch.int64)
             )
+            self.fold_seed = int(fold_seed)
             self.folds, self.n_folds, self.fold_rule = self._folds(f, n_folds)
         self.inputs = inputs
 
@@ -233,22 +220,23 @@ class H5Dataset(Dataset):
         self, f: h5py.File, n_folds: int | None
     ) -> tuple[torch.Tensor, int, str]:
         """(fold of every event, number of folds, rule): ``EVENT/fold`` (n_folds = the number of distinct
-        values) or, with ``n_folds``, ``fold_of(EVENT/event, n_folds)``."""
+        values) or, with ``n_folds``, ``fold_of(EVENT/event, n_folds, self.fold_seed)``."""
         if n_folds is not None:
+            rule = fold_rule(n_folds, self.fold_seed)
             if EVENT_KEY not in f:
                 raise KeyError(
-                    f"{self.path.name}: no {EVENT_KEY} dataset; fold = event % {n_folds} needs the event numbers"
+                    f"{self.path.name}: no {EVENT_KEY} dataset; fold = {rule} needs the event numbers"
                 )
             if FOLD_KEY in f:
                 logging.info(
-                    f"{self.path.name}: {FOLD_KEY} ignored, folds = event % {n_folds} from {EVENT_KEY}"
+                    f"{self.path.name}: {FOLD_KEY} ignored, folds = {rule} from {EVENT_KEY}"
                 )
-            folds = fold_of(f[EVENT_KEY][...], n_folds)
+            folds = fold_of(f[EVENT_KEY][...], n_folds, self.fold_seed)
             return torch.from_numpy(folds), n_folds, FOLD_RULE_EVENT
         if FOLD_KEY not in f:
             raise KeyError(
                 f"{self.path.name}: no {FOLD_KEY} dataset; pass --n-folds K (H5Dataset(n_folds=K)) "
-                f"to use fold = event % K from {EVENT_KEY}"
+                f"to use fold = squares(event) % K from {EVENT_KEY}"
             )
         folds = f[FOLD_KEY][...].astype(np.int64)
         return torch.from_numpy(folds), len(np.unique(folds)), FOLD_RULE_COLUMN

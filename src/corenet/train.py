@@ -22,8 +22,9 @@ the main logits, plus, for every further output ``o``, ``head_weights.get(o, 1.0
 binary cross entropy of its head against ``label == class index of o``. The view (candidate
 selection) scores are not supervised.
 
-Folds: ``EVENT/fold`` of the file, or ``--n-folds K`` for fold = event % K from the event numbers
-(``corenet.data.h5.fold_of``); ``--exclude-folds next`` is the fold (k + 1) % n_folds of held-out fold k.
+Folds: ``EVENT/fold`` of the file, or ``--n-folds K`` for fold = squares(event) % K from the event
+numbers (``corenet.data.folds.fold_of``, seed ``--fold-seed``, 0 = the rule of the example files);
+``--exclude-folds next`` is the fold (k + 1) % n_folds of held-out fold k.
 
 For each held-out fold k this writes, in ``--output-dir``:
     model_fold{k}.pkl          checkpoint: state dict, configuration, classes and metadata
@@ -44,6 +45,7 @@ import torch
 import torch.nn.functional as F
 
 from .checkpoint import save_checkpoint
+from .data.folds import FOLD_SEED
 from .data.h5 import H5Dataset
 from .evaluate import Batches, count_parameters, predict, write_predictions
 from .models.config import ConfigError, NetworkSpec, parse_config, read_config_dict
@@ -280,6 +282,7 @@ def train_fold(
             "input": str(args.input),
             "n_folds": ds.n_folds,
             "fold_rule": ds.fold_rule,
+            "fold_seed": ds.fold_seed,
             **recipe,
             "finetune_trainable_parameters": n_trainable,
         }
@@ -357,6 +360,7 @@ def train_fold(
                     "exclude_folds": exclude_folds,
                     "n_folds": ds.n_folds,
                     "fold_rule": ds.fold_rule,
+                    "fold_seed": ds.fold_seed,
                     "config": str(args.config),
                     "classes": spec.classes,
                     "recipe": recipe,
@@ -429,6 +433,7 @@ def train_fold(
             "fold": fold,
             "n_folds": ds.n_folds,
             "fold_rule": ds.fold_rule,
+            "fold_seed": ds.fold_seed,
         },
     )
     logging.info(
@@ -460,7 +465,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--n-folds",
         type=int,
         default=None,
-        help="use fold = event %% K computed from EVENT/event instead of the EVENT/fold column",
+        help="use fold = squares(event) %% K computed from EVENT/event instead of the EVENT/fold column",
+    )
+    p.add_argument(
+        "--fold-seed",
+        type=int,
+        default=FOLD_SEED,
+        help=f"seed of the squares(event) %% K rule [{FOLD_SEED}, the seed of the example files]",
     )
     p.add_argument(
         "--exclude-folds",
@@ -645,7 +656,13 @@ def main(argv=None):
         if torch.cuda.is_available() and args.device.startswith("cuda")
         else "cpu"
     )
-    ds = H5Dataset(args.input, spec, rest_order=args.rest_order, n_folds=args.n_folds)
+    ds = H5Dataset(
+        args.input,
+        spec,
+        rest_order=args.rest_order,
+        n_folds=args.n_folds,
+        fold_seed=args.fold_seed,
+    )
     logging.info(
         f"{args.input}: {len(ds):,} events, {ds.n_folds} folds ({ds.fold_rule}), device={device}, recipe "
         + ", ".join(f"{k}={getattr(args, k)}" for k in RECIPE_DEFAULTS)

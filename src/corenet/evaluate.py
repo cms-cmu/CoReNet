@@ -5,8 +5,9 @@ corenet-evaluate: apply a trained CoReNet to an HDF5 file and compute its perfor
         --output runs/hh4b/eval_fold0.h5
 
 Events: by default the fold held out when the checkpoint was trained (``--fold -1`` = every event of
-the file), with the checkpoint's fold rule: ``EVENT/fold`` of the file, or fold = event % n_folds when
-the model was trained with ``--n-folds`` (``--n-folds K`` overrides). The output file (layout in
+the file), with the checkpoint's fold rule: ``EVENT/fold`` of the file, or fold = squares(event) %
+n_folds with the checkpoint's seed when the model was trained with ``--n-folds`` (``--n-folds K`` and
+``--fold-seed`` override). The output file (layout in
 docs/Dataset.md) holds the class probabilities, the view (candidate) probabilities of every
 multi-candidate hypothesis, the auxiliary head probabilities, the event labels / weights and, for the
 main output, the ROC curve; the AUCs are printed and written as JSON next to it (``<output>.json``).
@@ -196,8 +197,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--n-folds",
         type=int,
         default=None,
-        help="use fold = event %% K computed from EVENT/event instead of the EVENT/fold column "
+        help="use fold = squares(event) %% K computed from EVENT/event instead of the EVENT/fold column "
         "(default: the checkpoint's rule)",
+    )
+    p.add_argument(
+        "--fold-seed",
+        type=int,
+        default=None,
+        help="seed of the squares(event) %% K rule (default: the checkpoint's, else 0)",
     )
     p.add_argument(
         "--rest-order",
@@ -216,7 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None):
-    from .checkpoint import load_checkpoint, n_folds_of
+    from .checkpoint import fold_rule_of, load_checkpoint
 
     args = build_parser().parse_args(argv)
     logging.basicConfig(
@@ -230,8 +237,14 @@ def main(argv=None):
     model, spec, ckpt = load_checkpoint(args.checkpoint, args.config, device)
     meta = ckpt.get("metadata", {})
     rest_order = args.rest_order or meta.get("rest_order", "pt")
-    n_folds = args.n_folds if args.n_folds is not None else n_folds_of(meta)
-    ds = H5Dataset(args.input, spec, rest_order=rest_order, n_folds=n_folds)
+    n_folds, fold_seed = fold_rule_of(meta)
+    if args.n_folds is not None:
+        n_folds = args.n_folds
+    if args.fold_seed is not None:
+        fold_seed = args.fold_seed
+    ds = H5Dataset(
+        args.input, spec, rest_order=rest_order, n_folds=n_folds, fold_seed=fold_seed
+    )
     fold = args.fold if args.fold is not None else meta.get("fold", -1)
     idx = (
         np.arange(len(ds))
@@ -271,6 +284,7 @@ def main(argv=None):
             "fold": -1 if fold is None else int(fold),
             "n_folds": ds.n_folds,
             "fold_rule": ds.fold_rule,
+            "fold_seed": ds.fold_seed,
             "n_parameters": count_parameters(model),
             "auc_main": metrics["auc"]["main"] or float("nan"),
         },

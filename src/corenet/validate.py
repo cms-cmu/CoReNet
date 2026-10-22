@@ -10,8 +10,9 @@ corenet-validate: check a configuration, and optionally an HDF5 file against it,
 2. Data (with ``--input``): every dataset the loader reads is looked up with the loader's own rules
    (``corenet.data.h5``: group aliases, used collections, computed event scalars, label keys) and its
    dtype and shape are checked; the labels must lie in 0..len(outputs), the weights must be finite,
-   the folds must exist for training (``EVENT/fold``, or ``--n-folds K`` for fold = event % K from
-   the event numbers; the report gives the fold source and the events per fold); the present members
+   the folds must exist for training (``EVENT/fold``, or ``--n-folds K`` for fold = squares(event) % K
+   from the event numbers, seed ``--fold-seed``; the report gives the fold source and the events per
+   fold); the present members
    must have finite features. Finally the actual loader (``H5Dataset``) reads the file and the network
    runs a forward pass on the first events, so a file that passes here also loads in corenet-train.
 
@@ -31,6 +32,7 @@ import numpy as np
 import torch
 
 from .data import h5 as loader
+from .data.folds import FOLD_SEED, fold_of, fold_rule
 from .models.config import (
     REST,
     ConfigError,
@@ -178,6 +180,7 @@ def check_data(
     rest_order: str = "pt",
     n_forward: int = 512,
     n_folds: int | None = None,
+    fold_seed: int = FOLD_SEED,
 ) -> None:
     sec = f"data {path}"
     try:
@@ -412,11 +415,11 @@ def check_data(
             report.fail(
                 sec,
                 f"{loader.FOLD_KEY} not found: corenet-train needs a fold index per event; "
-                "pass --n-folds K to use fold = event % K from EVENT/event",
+                "pass --n-folds K to use fold = squares(event) % K from EVENT/event",
             )
         folds, source = None, None
         if n_folds is not None:
-            source = f"event % {n_folds} (--n-folds)"
+            source = f"{fold_rule(n_folds, fold_seed)} (--n-folds)"
             if loader.EVENT_KEY not in f:
                 report.fail(
                     sec,
@@ -424,7 +427,7 @@ def check_data(
                 )
             else:
                 try:
-                    folds = loader.fold_of(f[loader.EVENT_KEY][...], n_folds)
+                    folds = fold_of(f[loader.EVENT_KEY][...], n_folds, fold_seed)
                 except ValueError as e:
                     report.fail(sec, f"folds = {source}: {e}")
         elif column is not None:
@@ -445,11 +448,13 @@ def check_data(
                 if n_diff:
                     report.warn(
                         sec,
-                        f"{loader.FOLD_KEY} disagrees with event % {n_folds} for {n_diff:,} of "
-                        f"{len(folds):,} events; corenet-train --n-folds {n_folds} ignores the column",
+                        f"{loader.FOLD_KEY} disagrees with {fold_rule(n_folds, fold_seed)} for "
+                        f"{n_diff:,} of {len(folds):,} events; corenet-train --n-folds {n_folds} ignores the column",
                     )
                 else:
-                    report.ok(sec, f"{loader.FOLD_KEY} equals event % {n_folds}")
+                    report.ok(
+                        sec, f"{loader.FOLD_KEY} equals {fold_rule(n_folds, fold_seed)}"
+                    )
         if loader.EVENT_KEY not in f:
             report.warn(
                 sec,
@@ -460,7 +465,9 @@ def check_data(
         return
     # ---- the actual loader and a forward pass
     try:
-        ds = loader.H5Dataset(path, spec, rest_order=rest_order, n_folds=n_folds)
+        ds = loader.H5Dataset(
+            path, spec, rest_order=rest_order, n_folds=n_folds, fold_seed=fold_seed
+        )
     except Exception as e:
         report.fail(sec, f"the loader (H5Dataset) fails: {type(e).__name__}: {e}")
         return
@@ -533,8 +540,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--n-folds",
         type=int,
         default=None,
-        help="report the fold = event %% K split of EVENT/event (as corenet-train --n-folds K uses) "
-        "instead of the EVENT/fold column",
+        help="report the fold = squares(event) %% K split of EVENT/event (as corenet-train --n-folds K "
+        "uses) instead of the EVENT/fold column",
+    )
+    p.add_argument(
+        "--fold-seed",
+        type=int,
+        default=FOLD_SEED,
+        help=f"seed of the squares(event) %% K rule [{FOLD_SEED}, the seed of the example files]",
     )
     p.add_argument(
         "--json", default=None, help="also write the report to this JSON file"
@@ -542,7 +555,9 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def validate(config, data=None, rest_order=None, n_folds=None) -> Report:
+def validate(
+    config, data=None, rest_order=None, n_folds=None, fold_seed=FOLD_SEED
+) -> Report:
     report = Report()
     spec = check_config(config, report)
     if spec is not None and data is not None:
@@ -553,7 +568,14 @@ def validate(config, data=None, rest_order=None, n_folds=None) -> Report:
                 )
             except Exception:
                 rest_order = "pt"
-        check_data(data, spec, report, rest_order=rest_order, n_folds=n_folds)
+        check_data(
+            data,
+            spec,
+            report,
+            rest_order=rest_order,
+            n_folds=n_folds,
+            fold_seed=fold_seed,
+        )
     elif data is not None:
         report.fail(f"data {data}", "not checked: the configuration is invalid")
     return report
@@ -563,7 +585,9 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.n_folds is not None and args.n_folds < 1:
         build_parser().error(f"--n-folds must be >= 1, got {args.n_folds}")
-    report = validate(args.config, args.input, args.rest_order, args.n_folds)
+    report = validate(
+        args.config, args.input, args.rest_order, args.n_folds, args.fold_seed
+    )
     report.print()
     if args.json:
         Path(args.json).write_text(json.dumps(report.to_dict(), indent=1))
