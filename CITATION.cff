@@ -3,10 +3,10 @@ cff-version: 1.2.0
 message: "If you use CoReNet, please cite it as below."
 title: "CoReNet: Combinatorial Residual Network"
 type: software
-version: 0.1.0
-date-released: "YYYY-MM-DD"            # to be confirmed
+version: 1.0.0
+date-released: "2026-10-22"
 license: MIT
-repository-code: "https://github.com/[owner]/CoReNet"   # to be confirmed
+repository-code: "https://github.com/cms-cmu/CoReNet"
 authors:
   - family-names: "Khanal"
     given-names: "Aniket"
