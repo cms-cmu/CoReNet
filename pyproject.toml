@@ -17,6 +17,7 @@ dependencies = [
     "h5py>=3.0",
     "pyyaml>=5.4",
     "scikit-learn>=1.0",
+    "matplotlib>=3.5",
 ]
 keywords = [
     "particle-physics",
@@ -49,6 +50,7 @@ corenet-train = "corenet.train:main"
 corenet-evaluate = "corenet.evaluate:cli"
 corenet-export = "corenet.export:cli"
 corenet-validate = "corenet.validate:cli"
+corenet-report = "corenet.report:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]
