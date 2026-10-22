@@ -373,33 +373,41 @@ def test_errors(tmp_path):
 
 
 def test_fold_rule():
-    """fold_of = event % n_folds; the default loader reads EVENT/fold; the two differ on the shipped files."""
-    from corenet.data.h5 import FOLD_RULE_COLUMN, FOLD_RULE_EVENT, fold_of
+    """fold_of = squares(event) % n_folds reproduces the EVENT/fold column of the example files
+    (5 folds, seed 0); the default loader reads the column; another seed or n_folds gives other folds."""
+    from corenet.data.folds import FOLD_SEED, fold_of, fold_rule
+    from corenet.data.h5 import FOLD_RULE_COLUMN, FOLD_RULE_EVENT
 
-    path = _need(DATA / "hh4b_small.h5")
-    spec = load_config(repo / "examples/hh4b/hh4b.yaml")
-    with h5py.File(path, "r") as f:
-        event, column = f["EVENT/event"][...], f["EVENT/fold"][...]
-    default = H5Dataset(path, spec)
-    assert default.fold_rule == FOLD_RULE_COLUMN and default.n_folds == 5
-    assert (default.folds.numpy() == column).all()
-    ds5 = H5Dataset(path, spec, n_folds=5)
-    assert ds5.fold_rule == FOLD_RULE_EVENT and ds5.n_folds == 5
-    assert (ds5.folds.numpy() == event % 5).all()
-    assert (ds5.folds.numpy() == fold_of(event, 5)).all()
-    assert set(ds5.folds.tolist()) == set(range(5))
-    # the EVENT/fold column of the example files was assigned from a hash of the event number when
-    # the files were produced (docs/Dataset.md): it is not event % 5, so the default (column) and the
-    # rule give different folds on these files
-    assert not (ds5.folds.numpy() == column).all()
-    ds3 = H5Dataset(path, spec, n_folds=3)
-    assert ds3.n_folds == 3 and set(ds3.folds.tolist()) == set(range(3))
-    assert (ds3.folds.numpy() == event % 3).all()
-    tr, te = ds3.fold_indices(0)
-    assert len(tr) + len(te) == len(ds3) and (event[te] % 3 == 0).all()
-    assert torch.equal(
-        ds3.inputs["b"], default.inputs["b"]
-    )  # the rule changes folds only
+    assert FOLD_SEED == 0 and fold_rule(5, 0) == "squares(event) % 5, seed 0"
+    for name, config in [
+        ("hh4b_small.h5", "examples/hh4b/hh4b.yaml"),
+        ("bbww_small.h5", "examples/bbww/bbww.yaml"),
+    ]:
+        path = _need(DATA / name)
+        spec = load_config(repo / config)
+        with h5py.File(path, "r") as f:
+            event, column = f["EVENT/event"][...], f["EVENT/fold"][...]
+        assert (fold_of(event, 5, 0) == column).all(), name  # all events
+        assert (fold_of(event, 5) == column).all()
+        default = H5Dataset(path, spec)
+        assert default.fold_rule == FOLD_RULE_COLUMN and default.n_folds == 5
+        assert default.fold_seed == 0 and (default.folds.numpy() == column).all()
+        ds5 = H5Dataset(path, spec, n_folds=5)
+        assert ds5.fold_rule == FOLD_RULE_EVENT == "squares(event) % n_folds"
+        assert ds5.n_folds == 5 and ds5.fold_seed == 0
+        assert torch.equal(ds5.folds, default.folds)
+        seeded = H5Dataset(path, spec, n_folds=5, fold_seed=1)
+        assert (seeded.folds.numpy() != column).any() and seeded.fold_seed == 1
+        assert (fold_of(event, 5, 1) != column).any()
+        ds3 = H5Dataset(path, spec, n_folds=3)
+        counts = np.bincount(ds3.folds.numpy(), minlength=3)
+        assert ds3.n_folds == 3 and len(counts) == 3 and counts.min() > 0.3 * len(ds3)
+        assert (ds3.folds.numpy() == fold_of(event, 3)).all()
+        tr, te = ds3.fold_indices(0)
+        assert len(tr) + len(te) == len(ds3) and (fold_of(event[te], 3) == 0).all()
+        assert torch.equal(
+            ds3.inputs["b"], default.inputs["b"]
+        )  # only the folds change
     with pytest.raises(ValueError, match="negative"):
         fold_of(np.array([3, -1]), 5)
     with pytest.raises(ValueError, match="n_folds"):
@@ -410,6 +418,8 @@ def test_fold_rule():
 
 def test_missing_fold_column(tmp_path):
     """Without EVENT/fold the loader asks for --n-folds; with it the folds come from EVENT/event."""
+    from corenet.data.folds import fold_of
+
     src = _need(DATA / "hh4b_small.h5")
     spec = load_config(repo / "examples/hh4b/hh4b.yaml")
     dst = tmp_path / "nofold.h5"
@@ -430,7 +440,7 @@ def test_missing_fold_column(tmp_path):
     with pytest.raises(KeyError, match="no EVENT/fold dataset; pass --n-folds"):
         H5Dataset(dst, spec)
     ds = H5Dataset(dst, spec, n_folds=5)
-    assert ds.n_folds == 5 and (ds.folds.numpy() == event % 5).all()
+    assert ds.n_folds == 5 and (ds.folds.numpy() == fold_of(event, 5)).all()
     with h5py.File(dst, "a") as g:
         del g["EVENT/event"]
     with pytest.raises(KeyError, match="no EVENT/event dataset"):

@@ -334,27 +334,43 @@ def test_missing_event_scalar_and_warnings(tmp_path):
 
 
 def test_fold_report(tmp_path):
-    """The fold source and the events per fold; --n-folds reports the event % K split instead."""
+    """The fold source and the events per fold; --n-folds reports the squares(event) % K split instead."""
+    from corenet.data.folds import fold_of
+
     data = write_synthetic(tmp_path / "d.h5", "bbww", n=400)
     r = validate.validate(BBWW, data)
     msgs = "\n".join(m for _, _, m in r.items)
     assert not r.errors and "folds from EVENT/fold: events per fold {0: " in msgs
     assert "--n-folds" not in msgs
-    # the synthetic folds are random: event % 5 disagrees with the column for most events
+    # the synthetic folds are random: the rule disagrees with the column for most events
     r = validate.validate(BBWW, data, n_folds=5)
     msgs = "\n".join(m for _, _, m in r.items)
     assert not r.errors, r.errors
-    assert "folds from event % 5 (--n-folds): events per fold {0: " in msgs
-    assert "EVENT/fold disagrees with event % 5 for " in "\n".join(r.warnings)
+    assert (
+        "folds from squares(event) % 5, seed 0 (--n-folds): events per fold {0: "
+        in msgs
+    )
+    assert "EVENT/fold disagrees with squares(event) % 5, seed 0 for " in "\n".join(
+        r.warnings
+    )
     assert "loader + forward pass" in msgs
-    # a column equal to the rule
+    # a column equal to the rule (seed 3)
     with h5py.File(data, "a") as f:
-        _replace(f, "EVENT/fold", f["EVENT/event"][...] % 5)
-    r = validate.validate(BBWW, data, n_folds=5)
-    assert not r.errors and "EVENT/fold equals event % 5" in "\n".join(
+        _replace(f, "EVENT/fold", fold_of(f["EVENT/event"][...], 5, 3))
+    r = validate.validate(BBWW, data, n_folds=5, fold_seed=3)
+    assert not r.errors and "EVENT/fold equals squares(event) % 5, seed 3" in "\n".join(
         m for _, _, m in r.items
     )
     assert not r.warnings, r.warnings
+    assert "disagrees" in "\n".join(validate.validate(BBWW, data, n_folds=5).warnings)
+    # the shipped file: its column is the rule with 5 folds and seed 0
+    shipped = repo / "examples/data/hh4b_small.h5"
+    if shipped.exists():
+        r = validate.validate(HH4B, shipped, n_folds=5)
+        assert not r.errors and not r.warnings, (r.errors, r.warnings)
+        assert "EVENT/fold equals squares(event) % 5, seed 0" in "\n".join(
+            m for _, _, m in r.items
+        )
     # no column: FAIL by default (see BROKEN_FILES), valid with --n-folds
     with h5py.File(data, "a") as f:
         del f["EVENT/fold"]
@@ -366,17 +382,25 @@ def test_fold_report(tmp_path):
     )
     r = validate.validate(BBWW, data, n_folds=3)
     msgs = "\n".join(m for _, _, m in r.items)
-    assert (
-        not r.errors
-        and "folds from event % 3 (--n-folds): events per fold {0: 134, 1: 133, 2: 133}"
+    with h5py.File(data, "r") as f:
+        counts = np.bincount(fold_of(f["EVENT/event"][...], 3), minlength=3).tolist()
+    expected = {i: c for i, c in enumerate(counts)}
+    assert not r.errors and (
+        f"folds from squares(event) % 3, seed 0 (--n-folds): events per fold {expected}"
         in msgs
     )
     # negative event numbers cannot be folded
     with h5py.File(data, "a") as f:
         _replace(f, "EVENT/event", f["EVENT/event"][...] - 10)
     r = validate.validate(BBWW, data, n_folds=3)
-    assert "folds = event % 3 (--n-folds): 10 event numbers are negative" in _errors(r)
+    assert (
+        "folds = squares(event) % 3, seed 0 (--n-folds): 10 event numbers are negative"
+        in _errors(r)
+    )
     with h5py.File(data, "a") as f:
         del f["EVENT/event"]
     r = validate.validate(BBWW, data, n_folds=3)
-    assert "folds = event % 3 (--n-folds): EVENT/event not found" in _errors(r)
+    assert (
+        "folds = squares(event) % 3, seed 0 (--n-folds): EVENT/event not found"
+        in _errors(r)
+    )

@@ -480,7 +480,9 @@ def test_finetune_recipe_from_config() -> None:
 
 
 def test_n_folds_rule() -> None:
-    """--n-folds K: folds = event % K; --exclude-folds next; the rule is stored and reused by corenet-evaluate."""
+    """--n-folds K: folds = squares(event) % K; --exclude-folds next; the rule and its seed are stored and
+    reused by corenet-evaluate."""
+    from corenet.data.folds import fold_of
     from corenet.data.h5 import FOLD_RULE_COLUMN, FOLD_RULE_EVENT
 
     assert train.resolve_exclude_folds(["next"], 4, 5) == [0]
@@ -515,17 +517,20 @@ def test_n_folds_rule() -> None:
         )
         h = json.loads((out_dir / "history_fold0.json").read_text())
         assert h["exclude_folds"] == [1] and h["n_folds"] == 3
-        assert h["fold_rule"] == FOLD_RULE_EVENT == "event % n_folds"
+        assert h["fold_rule"] == FOLD_RULE_EVENT == "squares(event) % n_folds"
+        assert h["fold_seed"] == 0
         meta = _metadata(out_dir)
         assert meta["n_folds"] == 3 and meta["fold_rule"] == FOLD_RULE_EVENT
-        assert meta["exclude_folds"] == [1]
+        assert meta["fold_seed"] == 0 and meta["exclude_folds"] == [1]
         with h5py.File(data, "r") as f:
             event = f["EVENT/event"][...]
-        n_test, n_val = int((event % 3 == 0).sum()), int((event % 3 == 1).sum())
+        folds3 = fold_of(event, 3)
+        n_test, n_val = int((folds3 == 0).sum()), int((folds3 == 1).sum())
         assert h["n_val"] == n_val and h["n_train"] == len(event) - n_test - n_val
         with h5py.File(out_dir / "predictions_fold0.h5", "r") as f:
             assert f.attrs["n_folds"] == 3 and f.attrs["fold_rule"] == FOLD_RULE_EVENT
-            assert (f["EVENT/event"][...] % 3 == 0).all() and len(
+            assert f.attrs["fold_seed"] == 0
+            assert (fold_of(f["EVENT/event"][...], 3) == 0).all() and len(
                 f["EVENT/event"]
             ) == n_test
             assert (f["EVENT/fold"][...] == 0).all()
@@ -545,6 +550,7 @@ def test_n_folds_rule() -> None:
         assert metrics["n_events"] == n_test
         with h5py.File(tmp / "eval.h5", "r") as f:
             assert f.attrs["n_folds"] == 3 and f.attrs["fold_rule"] == FOLD_RULE_EVENT
+            assert f.attrs["fold_seed"] == 0
         assert evaluate.main(
             [
                 "--checkpoint",
@@ -556,7 +562,7 @@ def test_n_folds_rule() -> None:
                 "--n-folds",
                 "5",
             ]
-        )["n_events"] == int((event % 5 == 0).sum())
+        )["n_events"] == int((fold_of(event, 5) == 0).sum())
         # a checkpoint trained on the column keeps the column rule and needs it in the file
         with_column = write_synthetic(tmp / "col.h5", "hh4b")
         train.main(
