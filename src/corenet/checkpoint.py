@@ -5,7 +5,8 @@
  "config_path": path of the configuration file at training time,
  "classes":  ["rest", <outputs>...],
  "metadata": {"fold", "epoch", "exclude_folds", "input", "n_folds", "fold_rule" ("EVENT/fold" or
-             "event % n_folds"), <training recipe>, "finetune_trainable_parameters"},
+             "squares(event) % n_folds"), "fold_seed", <training recipe>,
+             "finetune_trainable_parameters"},
  "format":   CHECKPOINT_FORMAT}
 
 ``format`` 2: every feature of a collection is a network input. Checkpoints without ``format`` were
@@ -22,6 +23,7 @@ from pathlib import Path
 
 import torch
 
+from .data.folds import FOLD_SEED
 from .data.h5 import FOLD_RULE_EVENT
 from .models.config import NetworkSpec, parse_config, read_config_dict
 from .models.network import CoReNet
@@ -30,12 +32,13 @@ CHECKPOINT_FORMAT = 2
 LEGACY_SKIPPED = ("btag",)  # features the network ignored before format 2
 
 
-def n_folds_of(metadata: dict) -> int | None:
-    """The ``n_folds`` to pass to ``H5Dataset`` for a checkpoint: its ``n_folds`` when it was trained with
-    fold = event % n_folds, else None (the ``EVENT/fold`` column)."""
+def fold_rule_of(metadata: dict) -> tuple[int | None, int]:
+    """(``n_folds``, ``fold_seed``) to pass to ``H5Dataset`` for a checkpoint: its ``n_folds`` and seed when
+    it was trained with fold = squares(event) % n_folds, else (None, seed) for the ``EVENT/fold`` column."""
+    seed = int(metadata.get("fold_seed", FOLD_SEED))
     if metadata.get("fold_rule") == FOLD_RULE_EVENT:
-        return metadata.get("n_folds")
-    return None
+        return metadata.get("n_folds"), seed
+    return None, seed
 
 
 def save_checkpoint(
@@ -116,8 +119,8 @@ def load_checkpoint(
 
 __all__ = [
     "CHECKPOINT_FORMAT",
+    "fold_rule_of",
     "legacy_config",
     "load_checkpoint",
-    "n_folds_of",
     "save_checkpoint",
 ]
