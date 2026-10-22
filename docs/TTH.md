@@ -224,4 +224,4 @@ Every command is run from the repository root in the pixi environment of the [RE
    | `report.html` | the results page |
 
 The commands, their options and their output files are the same as in the
-[HH → bb̄bb̄ guide](./HH4b.md). The report has no pairing accuracy, since the file has no `TARGETS`.
+[HH → bb̄bb̄ guide](./HH4b.md).
