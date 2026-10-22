@@ -11,16 +11,21 @@ One loader serves every topology: it reads the collections named in the configur
     inputs["event"]   (N, len(spec.event))                  event scalars in the configured order
 
 plus ``labels`` (``EVENT/label``, or ``CLASSIFICATIONS/EVENT/signal`` when absent), ``weights``
-(``EVENT/weight``), ``folds`` and ``events`` (``EVENT/event``). The cross-validation fold of an event
-is ``EVENT/fold`` by default; with ``n_folds`` it is ``fold_of(event, n_folds, fold_seed)`` =
-``squares(event) % n_folds`` (``corenet.data.folds``) computed from the event numbers, and the file
-needs no ``EVENT/fold`` column. No generator-level
+(``EVENT/weight``), ``folds`` and ``events`` (``EVENT/event``), and ``selected`` (role -> (N, n) int64:
+the slot of the file each role slot was taken from, -1 for a padded slot; ``corenet-report`` uses it to
+compare the candidates with ``TARGETS``). The cross-validation fold of an event
+is ``EVENT/fold`` by default, whose ids must be exactly 0..K-1 for K folds; with ``n_folds`` it is
+``fold_of(event, n_folds, fold_seed)`` = ``squares(event) % n_folds`` (``corenet.data.folds``)
+computed from the event numbers, and the file needs no ``EVENT/fold`` column. A file with neither
+loads without folds (``has_folds`` False, every fold -1): evaluating or exporting on every event works,
+selecting a fold (``fold_indices``: training, evaluating one fold) raises. No generator-level
 information is read: the roles are chosen from reconstructed quantities only.
 
 A collection's ``features`` are exactly the channels of its tensors. A selector reads the column it
 needs (its column and ``pt``) from the file on its own, whether or not it is a feature; such a column
 is used for the selection only (``columns_to_read``). A column listed under ``features`` is always a
-network input, ``btag`` included.
+network input, ``btag`` included. Columns are read at the file's dtype and sorted at that precision;
+they are cast to float32 only when the input tensors are built.
 
     ds = H5Dataset("examples/data/bbww_small.h5", load_config("examples/bbww/bbww.yaml"))
     out = model(ds.inputs)
@@ -64,10 +69,12 @@ LABEL_KEYS = (
     "CLASSIFICATIONS/EVENT/signal",
 )  # first one present is used
 WEIGHT_KEY, FOLD_KEY, EVENT_KEY = "EVENT/weight", "EVENT/fold", "EVENT/event"
-FOLD_RULE_EVENT, FOLD_RULE_COLUMN = (
+FOLD_RULE_EVENT, FOLD_RULE_COLUMN, FOLD_RULE_NONE = (
     "squares(event) % n_folds",
     "EVENT/fold",
-)  # H5Dataset.fold_rule
+    "none",
+)  # H5Dataset.fold_rule; "none": the file has no EVENT/fold and no n_folds was given
+NO_FOLD = -1  # the fold of every event of a file loaded without folds
 
 
 # ------------------------------------------------------------------ what the loader reads (shared with corenet-validate)
@@ -111,11 +118,22 @@ def resolve_group(f: h5py.File, name: str) -> str:
     )
 
 
+def _sortable(a: np.ndarray) -> np.ndarray:
+    """A column as read from the file, in a dtype that sorts exactly and can be negated: floats and
+    signed integers unchanged, bool -> int8, unsigned integers -> int64."""
+    if a.dtype.kind == "b":
+        return a.astype(np.int8)
+    if a.dtype.kind == "u":
+        return a.astype(np.int64)
+    return a
+
+
 def _read_collection(
     f: h5py.File, coll: Collection, columns: list[str]
 ) -> tuple[dict[str, np.ndarray], np.ndarray]:
     """(columns, present) of one collection, both shaped (N, slots in the file); ``columns`` are the
-    features plus the selector columns (``columns_to_read``)."""
+    features plus the selector columns (``columns_to_read``), at the file's dtype (``_sortable``) so that
+    the selectors sort at full precision; ``_stack`` casts to float32."""
     group = f["INPUTS"][resolve_group(f, coll.name)]
     missing = [k for k in columns if k not in group]
     if missing:
@@ -123,7 +141,7 @@ def _read_collection(
             f"collection {coll.name!r} (INPUTS/{group.name.split('/')[-1]}): missing columns {missing} "
             f"(features {coll.features}, selector columns {[c for c in columns if c not in coll.features]})"
         )
-    feats = {k: np.atleast_2d(group[k][...].astype(np.float32).T).T for k in columns}
+    feats = {k: np.atleast_2d(_sortable(group[k][...]).T).T for k in columns}
     n, slots = feats[columns[0]].shape
     if coll.max > 1 and slots < coll.max:
         raise ValueError(
@@ -168,7 +186,7 @@ class H5Dataset(Dataset):
         fold_seed: int = FOLD_SEED,
     ):
         """``n_folds``: use fold = squares(event) % n_folds (``fold_of``, seed ``fold_seed``) instead of the
-        ``EVENT/fold`` column."""
+        ``EVENT/fold`` column. Without both, the file loads without folds (``has_folds`` is False)."""
         if rest_order not in ("pt", "selector"):
             raise ValueError(
                 f"rest_order must be 'pt' or 'selector', got {rest_order!r}"
@@ -180,6 +198,9 @@ class H5Dataset(Dataset):
         self._last_keys: dict[
             str, tuple[np.ndarray, ...]
         ] = {}  # per collection: sort keys of the last explicit selector
+        self.selected: dict[
+            str, np.ndarray
+        ] = {}  # per role: (N, n) file slot of every role slot, -1 when padded
         inputs: dict[str, torch.Tensor] = {}
 
         with h5py.File(path, "r") as f:
@@ -213,14 +234,28 @@ class H5Dataset(Dataset):
                 else torch.arange(n, dtype=torch.int64)
             )
             self.fold_seed = int(fold_seed)
-            self.folds, self.n_folds, self.fold_rule = self._folds(f, n_folds)
+            self.folds, self.n_folds, self.fold_rule = self._folds(f, n_folds, n)
         self.inputs = inputs
 
+    @property
+    def has_folds(self) -> bool:
+        """False when the file has no ``EVENT/fold`` and no ``n_folds`` was given: every fold is NO_FOLD."""
+        return self.fold_rule != FOLD_RULE_NONE
+
+    def require_folds(self, what: str = "selecting a fold") -> None:
+        """Raise KeyError with the remedy when the file was loaded without folds."""
+        if not self.has_folds:
+            raise KeyError(
+                f"{self.path.name}: no {FOLD_KEY} dataset; {what} needs the fold of every event: pass --n-folds K "
+                f"(H5Dataset(n_folds=K)) to use fold = squares(event) % K from {EVENT_KEY}"
+            )
+
     def _folds(
-        self, f: h5py.File, n_folds: int | None
+        self, f: h5py.File, n_folds: int | None, n: int
     ) -> tuple[torch.Tensor, int, str]:
-        """(fold of every event, number of folds, rule): ``EVENT/fold`` (n_folds = the number of distinct
-        values) or, with ``n_folds``, ``fold_of(EVENT/event, n_folds, self.fold_seed)``."""
+        """(fold of every event, number of folds K, rule): with ``n_folds``, ``fold_of(EVENT/event, n_folds,
+        self.fold_seed)``; else ``EVENT/fold``, whose ids must be exactly 0..K-1; else (no column) every fold
+        is NO_FOLD, K = 0 and the rule is FOLD_RULE_NONE."""
         if n_folds is not None:
             rule = fold_rule(n_folds, self.fold_seed)
             if EVENT_KEY not in f:
@@ -234,12 +269,16 @@ class H5Dataset(Dataset):
             folds = fold_of(f[EVENT_KEY][...], n_folds, self.fold_seed)
             return torch.from_numpy(folds), n_folds, FOLD_RULE_EVENT
         if FOLD_KEY not in f:
-            raise KeyError(
-                f"{self.path.name}: no {FOLD_KEY} dataset; pass --n-folds K (H5Dataset(n_folds=K)) "
-                f"to use fold = squares(event) % K from {EVENT_KEY}"
-            )
+            return torch.full((n,), NO_FOLD, dtype=torch.int64), 0, FOLD_RULE_NONE
         folds = f[FOLD_KEY][...].astype(np.int64)
-        return torch.from_numpy(folds), len(np.unique(folds)), FOLD_RULE_COLUMN
+        ids = np.unique(folds)
+        if not np.array_equal(ids, np.arange(len(ids))):
+            shown = ids[:12].tolist() + (["..."] if len(ids) > 12 else [])
+            raise ValueError(
+                f"{self.path.name}: {FOLD_KEY} holds the fold ids {shown}; the ids of K folds must be exactly "
+                f"0..K-1 (--exclude-folds next = fold (k + 1) % K); renumber the column or pass --n-folds K"
+            )
+        return torch.from_numpy(folds), len(ids), FOLD_RULE_COLUMN
 
     # ---------------------------------------------------------------- construction
     def _role_tensor(
@@ -264,6 +303,7 @@ class H5Dataset(Dataset):
         rows = np.arange(len(present))[:, None]
         for j in range(role.n):  # mark the chosen members as consumed
             taken[rows[:, 0], idx[:, j]] |= valid[:, j]
+        self.selected[role.name] = np.where(valid, idx, -1).astype(np.int64)
         return self._stack(coll, feats, idx, valid)
 
     @staticmethod
@@ -273,13 +313,13 @@ class H5Dataset(Dataset):
         idx: np.ndarray,
         valid: np.ndarray,
     ) -> torch.Tensor:
-        """(N, len(features) + 1, n): features in configuration order, presence flag last, padding -1.
-        Columns read only for a selector are not stacked."""
+        """(N, len(features) + 1, n): features in configuration order, presence flag last, padding -1;
+        float32 (the columns are cast here). Columns read only for a selector are not stacked."""
         n, slots = idx.shape
         rows = np.arange(n)[:, None]
         x = np.full((n, len(coll.features) + 1, slots), -1.0, dtype=np.float32)
         for i, k in enumerate(coll.features):
-            x[:, i] = np.where(valid, feats[k][rows, idx], -1.0)
+            x[:, i] = np.where(valid, feats[k][rows, idx], -1.0).astype(np.float32)
         x[:, -1] = np.where(valid, 1.0, -1.0)
         return torch.from_numpy(x)
 
@@ -337,7 +377,8 @@ class H5Dataset(Dataset):
         }
 
     def fold_indices(self, fold: int) -> tuple[np.ndarray, np.ndarray]:
-        """(train_idx, val_idx) holding out ``fold``."""
+        """(train_idx, val_idx) holding out ``fold``; raises KeyError on a file loaded without folds."""
+        self.require_folds(f"holding out fold {fold}")
         val = (self.folds == fold).numpy()
         return np.flatnonzero(~val), np.flatnonzero(val)
 
@@ -348,8 +389,10 @@ __all__ = [
     "FOLD_KEY",
     "FOLD_RULE_COLUMN",
     "FOLD_RULE_EVENT",
+    "FOLD_RULE_NONE",
     "GROUP_ALIASES",
     "LABEL_KEYS",
+    "NO_FOLD",
     "WEIGHT_KEY",
     "H5Dataset",
     "columns_to_read",

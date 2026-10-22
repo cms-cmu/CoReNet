@@ -9,7 +9,7 @@ and export. Every command is run from the repository root in the pixi environmen
 
 The repository ships `examples/data/hh4b_small.h5` (20,000 events, 8.1 MB), a random subsample of the
 full file `examples/data/hh4b_all.h5` (454,261 events: 417,978 multijet, 36,283 HH; 184 MB). The full
-file is distributed separately ([Zenodo DOI to be added]); download it into `examples/data/`. Both
+file is distributed separately on Zenodo ([doi:10.5281/zenodo.23567532](https://doi.org/10.5281/zenodo.23567532)); download it into `examples/data/`. Both
 files have the same layout ([Dataset.md](./Dataset.md)):
 
 | path | shape | dtype | meaning |
@@ -173,6 +173,20 @@ description of its inputs and outputs, and checks both against PyTorch on events
 exported model takes the jets already assigned (`b`, `other`) and the event quantities, so the choice
 of the b jets has to be reproduced wherever the model is deployed; see Exporting in the
 [README](../README.md).
+
+## Report
+
+```bash
+corenet-evaluate --checkpoint runs/hh4b_full/model_fold0.pkl --input examples/data/hh4b_all.h5 \
+    --output runs/hh4b_full/eval_fold0.h5 --fold -1
+corenet-report --run-dir runs/hh4b_full --input examples/data/hh4b_all.h5 --output runs/hh4b_full/report.html
+```
+
+writes one HTML page with the training curves, the ROC curves and AUC per fold, the signal-score
+distributions on the test and training folds, the probabilities of the three pairings and their
+accuracy against `TARGETS`, the inputs as the network embeds them, the raw inputs and the event weights
+([Report.md](./Report.md)). The first command is optional: it gives the training and validation folds
+their own curves.
 
 ## Changing things
 

@@ -34,10 +34,10 @@ Changing one of these gives a different network: validate the file with `corenet
 | `freeze_epoch` | `--freeze-epoch` | 15 | start of the fine-tuning stage: from this epoch on only the layers named by `finetune_layers` are trained (a value ≥ `epochs` disables this) |
 | `finetune_layers` | `--finetune-layers PREFIX [PREFIX ...]` | `head_main.`, `head_reduce.`, `aux_heads.` (the output layers) | parameter-name prefixes that stay trainable from `freeze_epoch` on; `none` (the word, alone; `[]` in the file) freezes nothing |
 | `finetune_lr` | `--finetune-lr` | unset | learning rate set at `freeze_epoch`; the `lr_milestones` after it multiply this value by `lr_gamma`; unset keeps the schedule |
-| `finetune_batch_size` | `--finetune-batch-size` | unset | batch size from `freeze_epoch` on (the ghost batches of the stage are kept, capped so that none has fewer than 8 events); unset keeps the schedule |
+| `finetune_batch_size` | `--finetune-batch-size` | unset | batch size from `freeze_epoch` on; the ghost batches of the stage are kept when they divide it, else the largest smaller number that does, so that every ghost batch has at least 8 events; unset keeps the schedule |
 | `class_norm` | `--class-norm` / `--no-class-norm` | true | give every class the same total weight in training |
 | `seed` | `--seed` | 42 | random seed; fold `k` uses `seed + k` |
-| `early_stop_patience` | `--early-stop-patience` | 0 | stop when the validation AUC (on the `--exclude-folds` fold) has not improved for this many epochs, and keep the weights of the best epoch; 0 trains every epoch |
+| `early_stop_patience` | `--early-stop-patience` | 0 | stop when the validation AUC (on the `--exclude-folds` fold) has not improved for this many epochs, and keep the weights of the best epoch; 0 trains every epoch. The validation fold must differ from the held-out fold and hold events of class 1 and of another class, otherwise the run stops with an error |
 | `rest_order` | `--rest-order` | `pt` | order of the jets taken by a `rest` line: `pt`, or `selector` to keep the order of the previous candidate line on the same collection (e.g. `b: jets btag 4`) |
 
 Write floating-point numbers with a decimal point (`0.005` or `5.0e-3`): YAML reads `5e-3` as a string,

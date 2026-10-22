@@ -8,7 +8,8 @@ or in the optional ``trainer:`` section of the configuration, see docs/Options.m
   * Adam, learning rate ``lr`` (1e-2), MultiStepLR with ``lr_milestones`` (epochs 15..24) and
     ``lr_gamma`` (0.25): the learning rate is multiplied by 0.25 after each of those epochs;
   * ``epochs`` (20) epochs; batch size ``batch_size_init`` (1024) at epoch 0, doubled at epochs
-    1, 3, 6 and 10, with (64, 16, 4, 1, 0) ghost batches;
+    1, 3, 6 and 10, with (64, 16, 4, 1, 0) ghost batches (a batch is split into equal ghost batches,
+    so their number must divide the batch size);
   * the input normalisation of every embedder is frozen from the training set before epoch 0;
   * at epoch ``freeze_epoch`` (15) the fine-tuning stage starts: every parameter whose name does not
     start with one of the ``finetune_layers`` prefixes (the output heads) is frozen; ``finetune_lr``
@@ -22,9 +23,11 @@ the main logits, plus, for every further output ``o``, ``head_weights.get(o, 1.0
 binary cross entropy of its head against ``label == class index of o``. The view (candidate
 selection) scores are not supervised.
 
-Folds: ``EVENT/fold`` of the file, or ``--n-folds K`` for fold = squares(event) % K from the event
-numbers (``corenet.data.folds.fold_of``, seed ``--fold-seed``, 0 = the rule of the example files);
-``--exclude-folds next`` is the fold (k + 1) % n_folds of held-out fold k.
+Folds: ``EVENT/fold`` of the file (ids exactly 0..K-1), or ``--n-folds K`` for fold = squares(event) % K
+from the event numbers (``corenet.data.folds.fold_of``, seed ``--fold-seed``, 0 = the rule of the
+example files); ``--exclude-folds next`` is the fold (k + 1) % K of held-out fold k. Training needs one
+of the two. ``--early-stop-patience`` needs a validation set with events of class 1 and of another
+class; an empty validation set or a missing validation AUC stops the run with an error.
 
 For each held-out fold k this writes, in ``--output-dir``:
     model_fold{k}.pkl          checkpoint: state dict, configuration, classes and metadata
@@ -46,7 +49,7 @@ import torch.nn.functional as F
 
 from .checkpoint import save_checkpoint
 from .data.folds import FOLD_SEED
-from .data.h5 import H5Dataset
+from .data.h5 import FOLD_KEY, H5Dataset
 from .evaluate import Batches, count_parameters, predict, write_predictions
 from .models.config import ConfigError, NetworkSpec, parse_config, read_config_dict
 from .models.network import CoReNet
@@ -93,28 +96,63 @@ def batch_schedule(epoch: int, bs_init: int) -> tuple[int, int]:
     )
     bs = bs_init << stage
     n_gb = (64, 16, 4, 1, 0)[stage]
-    return bs, min(n_gb, max(1, bs // MIN_GHOST_BATCH_SIZE))  # no-op for bs_init >= 512
+    return bs, ghost_batches(
+        bs, n_gb
+    )  # equals the stage's count for any power-of-two batch size >= 512
+
+
+def ghost_batches(bs: int, cap: int) -> int:
+    """The largest number of ghost batches <= ``cap`` that divides the batch size ``bs`` into ghost batches of
+    at least MIN_GHOST_BATCH_SIZE events (the GBN layers split a batch into equal parts); 1 when no such
+    divisor exists, 0 when ``cap`` is 0 (running statistics)."""
+    if cap <= 0:
+        return 0
+    for n in range(min(cap, bs // MIN_GHOST_BATCH_SIZE), 1, -1):
+        if bs % n == 0:
+            return n
+    return 1
 
 
 def finetune_batch(epoch: int, bs_init: int, finetune_batch_size: int | None):
-    """(batch size, ghost batches) of the fine-tuning stage: ``finetune_batch_size`` when set (ghost batches
-    capped so that none has fewer than MIN_GHOST_BATCH_SIZE events, 0 stays 0), else the schedule."""
+    """(batch size, ghost batches) of the fine-tuning stage: ``finetune_batch_size`` when set, with the
+    schedule's ghost batches reduced to the largest divisor of the batch size that keeps every ghost batch
+    at >= MIN_GHOST_BATCH_SIZE events (``ghost_batches``; 0 stays 0), else the schedule."""
     bs, n_gb = batch_schedule(epoch, bs_init)
     if finetune_batch_size is None:
         return bs, n_gb
     bs = finetune_batch_size
-    return bs, min(n_gb, max(1, bs // MIN_GHOST_BATCH_SIZE))
+    return bs, ghost_batches(bs, n_gb)
+
+
+def check_finetune_layers(model: CoReNet, prefixes) -> None:
+    """At least one ``finetune_layers`` prefix must match a trainable parameter name; otherwise the fine-tuning
+    stage would freeze everything. Raises ConfigError naming the prefixes and the prefixes that exist. A single
+    prefix that matches nothing is allowed: the default ``head_reduce.`` and ``aux_heads.`` exist only in
+    networks with several combined pixels or auxiliary heads."""
+    names = [n for n, p in model.named_parameters() if p.requires_grad]
+    if not any(n.startswith(p) for p in prefixes for n in names):
+        valid = sorted({n.split(".")[0] + "." for n in names})
+        raise ConfigError(
+            f"finetune_layers: {list(prefixes)} match no trainable parameter (the fine-tuning stage would train "
+            f"nothing); parameter names start with {valid}, e.g. {names[:3]}; '{NO_FINETUNE_LAYERS}' freezes nothing"
+        )
 
 
 def freeze_heads(model: CoReNet, prefixes=HEAD_PREFIXES) -> int:
     """Freeze every parameter whose name does not start with one of ``prefixes`` (default: the output heads
     head_main, head_reduce, aux_heads); parameters that are non-trainable by construction stay so.
-    Returns the number of trainable parameters."""
+    Returns the number of trainable parameters; raises ConfigError when none is left."""
     prefixes = tuple(prefixes)
+    check_finetune_layers(model, prefixes)  # names the prefixes that match nothing
     for name, param in model.named_parameters():
         if not name.startswith(prefixes):
             param.requires_grad = False
-    return count_trainable(model)
+    n = count_trainable(model)
+    if n == 0:
+        raise ConfigError(
+            f"finetune_layers {list(prefixes)}: no trainable parameter is left for the fine-tuning stage"
+        )
+    return n
 
 
 def count_trainable(model: torch.nn.Module) -> int:
@@ -248,11 +286,19 @@ def train_fold(
     logging.info(
         f"fold {fold}: {len(train_idx):,} training / {len(val_idx):,} validation / {len(test_idx):,} held-out events"
     )
+    if args.early_stop_patience and not len(val_idx):
+        raise SystemExit(
+            f"fold {fold}: --early-stop-patience {args.early_stop_patience} needs validation events, but "
+            f"--exclude-folds {exclude_folds} leaves none (held-out fold {fold}; folds 0..{ds.n_folds - 1}): "
+            "exclude a fold other than the held-out one"
+        )
 
     model = CoReNet(spec, device=str(device)).to(device)
     logging.info(
         f"{args.config}: classes {spec.classes}, {count_parameters(model):,} parameters"
     )
+    if args.finetune_layers:
+        check_finetune_layers(model, args.finetune_layers)
     data = Batches(ds, device)
     w_dev = weights.to(device)
     aux, head_weights = aux_targets(spec), dict(spec.training.head_weights or {})
@@ -380,9 +426,19 @@ def train_fold(
                 else ""
             )
         )
-        if args.early_stop_patience and len(val_idx):
+        if args.early_stop_patience:
             auc = entry.get("val_auc")
-            if auc is not None and (best_auc is None or auc > best_auc):
+            if auc is None or not np.isfinite(auc):
+                val_label = labels[val_idx]
+                counts = {
+                    c: int((val_label == i).sum()) for i, c in enumerate(spec.classes)
+                }
+                raise SystemExit(
+                    f"fold {fold}: epoch {epoch}: no validation AUC, so --early-stop-patience cannot be applied: "
+                    f"the validation folds {exclude_folds} hold {counts} events (positive-weight events of "
+                    f"class 1 `{spec.classes[1]}` and of another class are needed)"
+                )
+            if best_auc is None or auc > best_auc:
                 best_auc, best_epoch, bad = auc, epoch, 0
                 best_state = {
                     k: v.detach().clone() for k, v in model.state_dict().items()
@@ -663,6 +719,11 @@ def main(argv=None):
         n_folds=args.n_folds,
         fold_seed=args.fold_seed,
     )
+    if not ds.has_folds:
+        raise SystemExit(
+            f"{args.input}: no {FOLD_KEY} dataset; training needs the fold of every event: pass --n-folds K "
+            "to use fold = squares(event) % K from EVENT/event"
+        )
     logging.info(
         f"{args.input}: {len(ds):,} events, {ds.n_folds} folds ({ds.fold_rule}), device={device}, recipe "
         + ", ".join(f"{k}={getattr(args, k)}" for k in RECIPE_DEFAULTS)

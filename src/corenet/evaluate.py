@@ -7,7 +7,8 @@ corenet-evaluate: apply a trained CoReNet to an HDF5 file and compute its perfor
 Events: by default the fold held out when the checkpoint was trained (``--fold -1`` = every event of
 the file), with the checkpoint's fold rule: ``EVENT/fold`` of the file, or fold = squares(event) %
 n_folds with the checkpoint's seed when the model was trained with ``--n-folds`` (``--n-folds K`` and
-``--fold-seed`` override). The output file (layout in
+``--fold-seed`` override). A file without ``EVENT/fold`` is evaluated with ``--fold -1`` (or
+``--n-folds K``); its events then carry fold -1 in the output. The output file (layout in
 docs/Dataset.md) holds the class probabilities, the view (candidate) probabilities of every
 multi-candidate hypothesis, the auxiliary head probabilities, the event labels / weights and, for the
 main output, the ROC curve; the AUCs are printed and written as JSON next to it (``<output>.json``).
@@ -30,7 +31,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from .data.h5 import H5Dataset
+from .data.h5 import FOLD_KEY, H5Dataset
 from .models.config import NetworkSpec
 from .models.network import CoReNet
 
@@ -246,6 +247,11 @@ def main(argv=None):
         args.input, spec, rest_order=rest_order, n_folds=n_folds, fold_seed=fold_seed
     )
     fold = args.fold if args.fold is not None else meta.get("fold", -1)
+    if fold is not None and fold >= 0 and not ds.has_folds:
+        raise SystemExit(
+            f"{args.input}: no {FOLD_KEY} dataset, so fold {fold} cannot be selected: pass --fold -1 to evaluate "
+            "every event, or --n-folds K to use fold = squares(event) % K from EVENT/event"
+        )
     idx = (
         np.arange(len(ds))
         if fold is None or fold < 0

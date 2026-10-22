@@ -10,7 +10,9 @@ Structure of one forward pass:
     2. features      log(1+pt), eta, dphi-to-parent, log(1+m) for every child slot; the top node
                      drops phi; event scalars whose name contains ``nSelJets`` enter as
                      log(nSelJets - (min_jets - 1))
-    3. embedding     GBN embed (+ event scalars for leaves) -> conv, per role / node
+    3. embedding     GBN embed (+ event scalars for leaves) -> conv, per role / node; the ``context``
+                     objects are embedded from their kinematics, a flag and the context role's extra
+                     (non-kinematic) features
     4. reinforce     bottom-up ResNetBlock per composite node (a node reused by several
                      hypotheses is computed once); ``context`` attention after the first level;
                      ``attention`` entries as soon as both nodes exist, with the pair
@@ -115,13 +117,15 @@ class _Embed(nn.Module):
 
 
 class _Context(nn.Module):
-    """``context: <role>``: the objects self-attend, then the first-level candidates attend to them."""
+    """``context: <role>``: the objects self-attend, then the first-level candidates attend to them.
+    ``n_extra``: the number of extra (non-kinematic) features of the context role, which every object
+    carries after its flag (``CoReNet._prepare_context``); 0 for a role with kinematic features only."""
 
-    def __init__(self, d, heads, phase_symmetric, gate, kv, device):
+    def __init__(self, d, heads, phase_symmetric, gate, kv, device, n_extra=0):
         super().__init__()
         self.embed = _Embed(
-            4, d, phase_symmetric, "attention jet", device
-        )  # log pt, eta, log m, flag
+            4 + n_extra, d, phase_symmetric, "attention jet", device
+        )  # log pt, eta, log m, flag (+ the context role's extra features)
         self.pair = _Embed(
             3, d, phase_symmetric, "M(a,b), dPhi(a,b)", device
         )  # log(1+M), dphi, pair-type flag
@@ -258,6 +262,7 @@ class CoReNet(nn.Module):
                     tr.attention_gate,
                     tr.kv_projection,
                     device,
+                    n_extra=len(self._extras(hs.context)),
                 )
                 for h, hs in spec.hypotheses.items()
                 if hs.context
@@ -615,15 +620,21 @@ class CoReNet(nn.Module):
         hs = self.spec.hypotheses[h]
         if hs.context:
             prep["context"] = self._prepare_context(
-                h, T, hs.context, leaf_kin, leaf_present, kin, kinP
+                h, T, hs.context, leaf_kin, leaf_extra, leaf_present, kin, kinP
             )
         return prep
 
-    def _prepare_context(self, h, T, crole, leaf_kin, leaf_present, kin, kinP):
+    def _prepare_context(
+        self, h, T, crole, leaf_kin, leaf_extra, leaf_present, kin, kinP
+    ):
         """Objects = this hypothesis' leaves (jet roles, lepton, MET; flag 2) + the context role (its own flag); pair
         matrices object-object (flag 0) and first-level-candidate-object (flag 1), with masks.
         ``crole`` is the context role (e.g. ``other``: the jets not assigned to any decay product); ``o`` (n, 5, S) the
-        S objects the candidates may look at; ``d`` (n, 4, P) the P candidates of the first-level node."""
+        S objects the candidates may look at; ``d`` (n, 4, P) the P candidates of the first-level node.
+        ``feats`` (n, 4 + E, S) is the embedding input of the objects: log pt, eta, log m, flag, then the E extra
+        (non-kinematic) features of the context role in its feature order. An object of another leaf carries the
+        same E channels: an extra its own collection also has is taken from its tensor, one it lacks is -1 (the
+        padding value); the pair features are kinematic only and unchanged."""
         first = self.levels[h][0]
         # every leaf of the hypothesis (jet roles and single-object collections such as lepton / MET), flag 2
         leaf_roles = [
@@ -674,6 +685,25 @@ class CoReNet(nn.Module):
             torch.isinf(of) | torch.isnan(of), torch.full_like(of, -1.0), of
         )
         of = torch.cat((of[:, :2], of[:, 3:]), 1)  # log pt, eta, log m, flag
+        extras = self._extras(crole)
+        if extras:  # (n, E, S): the context role's extra features for every object, -1 where a leaf lacks one
+            cols = []
+            for r in [*leaf_roles, crole]:
+                have = self._extras(r)
+                for e in extras:
+                    cols.append(
+                        leaf_extra[r][:, have.index(e) : have.index(e) + 1, :]
+                        if e in have
+                        else torch.full_like(leaf_kin[r][:, 0:1, :], -1.0)
+                    )
+            ex = torch.cat(
+                [
+                    torch.cat(cols[i * len(extras) : (i + 1) * len(extras)], 1)
+                    for i in range(len(leaf_roles) + 1)
+                ],
+                2,
+            )
+            of = torch.cat([of, ex], 1)
         return {
             "feats": of,
             "mask": mask,

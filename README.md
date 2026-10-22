@@ -21,8 +21,8 @@ pixi shell                       # activate; or prefix every command with `pixi 
 pixi itself is a single static binary (`curl -fsSL https://pixi.sh/install.sh | sh`) that needs no root
 access, so the same commands work on a laptop and on a cluster front end.
 
-This installs the command-line tools `corenet-validate`, `corenet-train`, `corenet-evaluate` and
-`corenet-export` (each has `--help`), and the Python package `corenet`. The unit tests run with
+This installs the command-line tools `corenet-validate`, `corenet-train`, `corenet-evaluate`,
+`corenet-export` and `corenet-report` (each has `--help`), and the Python package `corenet`. The unit tests run with
 `pytest tests`.
 
 ## Dependencies
@@ -35,6 +35,7 @@ This installs the command-line tools `corenet-validate`, `corenet-train`, `coren
 | h5py | 3.0 | input and prediction files |
 | PyYAML | 5.4 | configuration files |
 | scikit-learn | 1.0 | AUC / ROC in `corenet-evaluate` |
+| matplotlib | 3.5 | figures of `corenet-report` |
 | onnx, onnxruntime | 1.14, 1.15 | `corenet-export` (optional extra `export`) |
 | pytest | 7 | tests (optional extra `test`) |
 
@@ -62,9 +63,12 @@ corenet-evaluate --checkpoint runs/hh4b/model_fold0.pkl --input examples/data/hh
 # 4. export to TorchScript and ONNX, and check the exported models against PyTorch
 corenet-export --checkpoint runs/hh4b/model_fold0.pkl --input examples/data/hh4b_small.h5 \
     --output-dir runs/hh4b/export
+
+# 5. one HTML page with the training curves, ROC curves, pairings and input checks of the run
+corenet-report --run-dir runs/hh4b --input examples/data/hh4b_small.h5 --output runs/hh4b/report.html
 ```
 
-The same four commands with `bbww` in place of `hh4b` run the HH → bb̄WW example.
+The same five commands with `bbww` in place of `hh4b` run the HH → bb̄WW example.
 [docs/HH4b.md](docs/HH4b.md) walks through the HH → bb̄bb̄ example step by step;
 [docs/BBWW.md](docs/BBWW.md) does the same for HH → bb̄WW against tt̄.
 
@@ -90,7 +94,7 @@ combine: [HH]
 
 `jets` is the jet collection: `max: 12` is the number of jet slots read per event, and the input file must
 have at least that many. The listed `features` are the inputs of the network: these columns of the input
-file, and only these, are fed to it. \
+file, and only these, are fed to it, for the `b` jets and for the `other` jets alike. \
 `jets btag 4` selects the four jets with the highest `btag` (alternatively `jets pt 4` would select the four
 leading jets): any column of the jets in the file can be used this way, and `jets mass 2 lowest` would take the
 two jets with the lowest value instead. The selector reads its column from the file for this selection only; it
@@ -98,7 +102,7 @@ need not be a feature, and a feature named `btag` would be one more network inpu
 file holds all jets of the event, and the b jets are chosen when it is loaded. For more details on specifying the event decay, check [docs/EventInfo.md](docs/EventInfo.md), and for the input file itself, check [docs/Dataset.md](docs/Dataset.md).
 
 The full-statistics files (454,261 HH → bb̄bb̄ events, 292,285 HH → bb̄WW events) are distributed
-separately ([DOI / URL to be added]); download them into `examples/data/` as `hh4b_all.h5` and
+separately on Zenodo ([doi:10.5281/zenodo.23567532](https://doi.org/10.5281/zenodo.23567532)); download them into `examples/data/` as `hh4b_all.h5` and
 `bbww_all.h5`.
 
 ## Usage
@@ -169,6 +173,7 @@ Output:
 |---|---|
 | `eval_fold0.h5.json` | the metrics |
 | `eval_fold0.h5` | the predictions, as below |
+| `report.html` | every result of the run on one page, written by `corenet-report` ([Report](#report) below) |
 
 | dataset in `eval_fold0.h5` | content |
 |---|---|
@@ -221,6 +226,27 @@ and `event` (N, 2); for HH → bb̄WW `b` (N, 5, 2), `q` (N, 5, 2), `lepton` (N,
 | `class_probabilities` | (N, n_classes) | probability of every class, columns `["rest", <outputs>...]` |
 | `views_<hypothesis>` | (N, V) | probability of every pairing of a hypothesis with several pairings |
 | `head_<output>` | (N,) | the extra binary score of every output after the first |
+
+### Report
+
+```bash
+corenet-report --run-dir runs/bbww --input examples/data/bbww_all.h5 --output runs/bbww/report.html
+```
+
+* `--folds 0 1`: report these folds only (default: every fold found in the run directory).
+* `--max-events 500000`: events of the input file used for the input and weight distributions (random subsample above it; `0` = all).
+* `--config my_config.yaml`: event description to use instead of the one stored in the checkpoint.
+
+To see the training and validation folds in the ROC and score figures (overtraining check), first write the
+predictions of every event with `corenet-evaluate ... --output runs/bbww/eval_fold0.h5 --fold -1`.
+
+Output:
+
+| file | content |
+|---|---|
+| `report.html` | self-contained page: run summary, training curves, ROC / AUC / score distributions, view probabilities and pairing accuracy against `TARGETS`, the inputs as the network embeds them, the raw inputs and the event weights ([docs/Report.md](docs/Report.md)) |
+
+Open `report.html` in any browser; from a cluster, copy it to your machine first (`scp <host>:runs/bbww/report.html .`).
 
 ```python
 import onnxruntime as ort

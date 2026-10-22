@@ -7,12 +7,15 @@ configurations (HH -> 4b: 2 classes; HH -> bbWW: 3 classes and an auxiliary ttba
   4. the checkpoint is self-contained and corenet-evaluate reproduces the training-time predictions,
   5. the `trainer:` section of the configuration sets the recipe and the command line overrides it,
   6. the fine-tuning stage (finetune_layers / finetune_lr / finetune_batch_size) and its defaults,
-  7. the fold rule (--n-folds, --exclude-folds next) and its record in checkpoint and predictions.
+  7. the fold rule (--n-folds, --exclude-folds next) and its record in checkpoint and predictions,
+  8. the guards: ghost batches divide the fine-tuning batch size, finetune_layers prefixes must match,
+     early stopping needs a validation AUC, a file without folds trains not but evaluates and exports.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -174,6 +177,31 @@ def check_freeze(config: Path, expected_params: int) -> None:
     frozen = {n for n, p in model.named_parameters() if not p.requires_grad}
     assert not any(n.startswith(train.HEAD_PREFIXES) for n in frozen), sorted(frozen)
     assert 0 < n_trainable < expected_params
+
+
+def test_batch_schedule_divides_any_batch_size() -> None:
+    """The ghost-batch count of the regular schedule divides the batch size for any --batch-size-init."""
+    assert [train.batch_schedule(e, 300) for e in (0, 1, 3, 6, 10)] == [
+        (300, 30),
+        (600, 15),
+        (1200, 4),
+        (2400, 1),
+        (4800, 0),
+    ]
+    for bs_init in (64, 100, 300, 1000, 1500):
+        for e in range(12):
+            bs, n_gb = train.batch_schedule(e, bs_init)
+            assert n_gb == 0 or (
+                bs % n_gb == 0 and bs // n_gb >= train.MIN_GHOST_BATCH_SIZE
+            ), (bs_init, e, bs, n_gb)
+    for k in range(6, 13):  # powers of two: unchanged from the original schedule
+        bs_init = 1 << k
+        for e in range(12):
+            bs, n_gb = train.batch_schedule(e, bs_init)
+            stage = 0 if e == 0 else 1 if e < 3 else 2 if e < 6 else 3 if e < 10 else 4
+            assert n_gb == min(
+                (64, 16, 4, 1, 0)[stage], max(1, bs // train.MIN_GHOST_BATCH_SIZE)
+            )
 
 
 def test_batch_schedule() -> None:
@@ -445,6 +473,168 @@ def test_finetune_lr_and_batch_size() -> None:
     assert train.finetune_batch(0, 1024, 4) == (4, 1)
 
 
+def test_finetune_batch_size_divisor() -> None:
+    """The ghost batches of the fine-tuning stage divide the batch size (the GBN layers split a batch into
+    equal ghost batches): 300 events get 15 (epochs 1-2, cap 16) or 30 (epoch 0, cap 64) ghost batches of
+    >= 8 events, powers of two keep the schedule, and training with --finetune-batch-size 300 runs."""
+    assert train.ghost_batches(300, 16) == 15 and train.ghost_batches(300, 64) == 30
+    assert train.ghost_batches(300, 4) == 4 and train.ghost_batches(300, 1) == 1
+    assert train.ghost_batches(300, 0) == 0 and train.ghost_batches(7, 64) == 1
+    assert train.ghost_batches(301, 16) == 7  # 301 = 7 * 43
+    assert train.finetune_batch(1, 1024, 300) == (300, 15)
+    assert train.finetune_batch(0, 1024, 300) == (300, 30)
+    assert train.finetune_batch(3, 1024, 300) == (300, 4)
+    assert train.finetune_batch(10, 1024, 300) == (300, 0)
+    for epoch, cap in ((0, 64), (1, 16), (3, 4), (6, 1), (10, 0)):
+        for bs in (64, 128, 256, 512, 1024, 2048, 4096):
+            old = min(cap, max(1, bs // train.MIN_GHOST_BATCH_SIZE)) if cap else 0
+            assert train.finetune_batch(epoch, 1024, bs) == (bs, old), (epoch, bs)
+            assert bs % max(old, 1) == 0
+    with tempfile.TemporaryDirectory(prefix="corenet_ft_") as tmp:
+        tmp = Path(tmp)
+        data = write_synthetic(tmp / "hh4b_all.h5", "hh4b")
+        h = _train(data, tmp / "m", "--finetune-batch-size", "300")
+        e0, e1 = h["history"]
+        assert e0["batch_size"] == 128 and e0["ghost_batches"] == 16
+        assert e1["batch_size"] == 300 and e1["ghost_batches"] == 15
+        assert np.isfinite(e1["train_loss"]) and 0.0 <= e1["val_auc"] <= 1.0
+
+
+def test_finetune_layers_must_match() -> None:
+    """finetune_layers prefixes that match no parameter at all would freeze everything: an error naming them
+    and the prefixes that exist, raised before the first epoch. One unmatched prefix among matching ones is
+    allowed (the default `head_reduce.` / `aux_heads.` match nothing in the HH -> 4b network)."""
+    with tempfile.TemporaryDirectory(prefix="corenet_ft_") as tmp:
+        tmp = Path(tmp)
+        data = write_synthetic(tmp / "hh4b_all.h5", "hh4b")
+        with pytest.raises(
+            ConfigError,
+            match=r"finetune_layers: \['nosuch\.'\] match no trainable parameter.*'head_main\.'.*'none' freezes nothing",
+        ):
+            _train(data, tmp / "bad", "--finetune-layers", "nosuch.")
+        assert not (tmp / "bad" / "history_fold0.json").exists()
+        h = _train(data, tmp / "mixed", "--finetune-layers", "head_main.", "nosuch.")
+        assert h["finetune_trainable_parameters"] == 18  # head_main of the 4b network
+    model = CoReNet(load_config(HH4B), device="cpu")
+    train.check_finetune_layers(model, train.HEAD_PREFIXES)
+    train.check_finetune_layers(model, ["head_main.", "nosuch."])
+    with pytest.raises(
+        ConfigError, match=r"\['nosuch\.', 'typo'\] match no trainable parameter"
+    ):
+        train.check_finetune_layers(model, ["nosuch.", "typo"])
+    with pytest.raises(ConfigError, match="nosuch"):
+        train.freeze_heads(model, ["nosuch."])
+    assert train.count_trainable(model) > 0  # nothing was frozen by the failed call
+
+
+def test_early_stopping_needs_validation() -> None:
+    """--early-stop-patience stops with an error when the validation set is empty (--exclude-folds names the
+    held-out fold) or has no validation AUC (one class in the validation fold); without it both runs proceed."""
+    with tempfile.TemporaryDirectory(prefix="corenet_es_") as tmp:
+        tmp = Path(tmp)
+        data = write_synthetic(tmp / "hh4b_all.h5", "hh4b")
+        with pytest.raises(
+            SystemExit,
+            match=r"--early-stop-patience 1 needs validation events, but --exclude-folds \[0\] leaves none",
+        ):
+            _train(
+                data,
+                tmp / "empty",
+                "--exclude-folds",
+                "0",
+                "--early-stop-patience",
+                "1",
+                epochs=1,
+            )
+        h = _train(data, tmp / "empty_ok", "--exclude-folds", "0", epochs=1)
+        assert h["n_val"] == 0 and "val_loss" not in h["history"][0]
+        one = tmp / "oneclass.h5"
+        shutil.copy(data, one)
+        with h5py.File(one, "a") as f:
+            label, fold = f["EVENT/label"][...], f["EVENT/fold"][...]
+            label[fold == 1] = 0
+            del f["EVENT/label"]
+            f.create_dataset("EVENT/label", data=label)
+        with pytest.raises(
+            SystemExit,
+            match=r"epoch 0: no validation AUC, so --early-stop-patience cannot be applied: the validation folds \[1\] hold \{'rest': \d+, 'signal': 0\}",
+        ):
+            _train(one, tmp / "oneclass", "--early-stop-patience", "1", epochs=1)
+        h = _train(one, tmp / "oneclass_ok", epochs=1)
+        assert h["n_val"] > 0 and "val_auc" not in h["history"][0]
+        assert np.isfinite(h["history"][0]["val_loss"])
+
+
+def test_file_without_folds() -> None:
+    """A file with neither EVENT/fold nor --n-folds: training stops with a clear message, corenet-evaluate
+    needs --fold -1 (every event; the output carries fold -1) and corenet-export works."""
+    from corenet import export
+    from corenet.data.h5 import FOLD_RULE_NONE, NO_FOLD
+
+    with tempfile.TemporaryDirectory(prefix="corenet_nofold_") as tmp:
+        tmp = Path(tmp)
+        data = write_synthetic(tmp / "hh4b_all.h5", "hh4b")
+        _train(data, tmp / "m", epochs=1)
+        ckpt = tmp / "m" / "model_fold0.pkl"
+        nofold = tmp / "nofold.h5"
+        shutil.copy(data, nofold)
+        with h5py.File(nofold, "a") as f:
+            del f["EVENT/fold"]
+        with pytest.raises(
+            SystemExit,
+            match="no EVENT/fold dataset; training needs the fold of every event: pass --n-folds K",
+        ):
+            _train(nofold, tmp / "nofold_train", epochs=1)
+        assert not (tmp / "nofold_train").exists()
+        with pytest.raises(
+            SystemExit,
+            match="no EVENT/fold dataset, so fold 0 cannot be selected: pass --fold -1",
+        ):
+            evaluate.main(
+                [
+                    "--checkpoint",
+                    str(ckpt),
+                    "--input",
+                    str(nofold),
+                    "--output",
+                    str(tmp / "e0.h5"),
+                ]
+            )
+        metrics = evaluate.main(
+            [
+                "--checkpoint",
+                str(ckpt),
+                "--input",
+                str(nofold),
+                "--output",
+                str(tmp / "eall.h5"),
+                "--fold",
+                "-1",
+            ]
+        )
+        assert metrics["n_events"] == 2000 and 0.0 <= metrics["auc"]["main"] <= 1.0
+        with h5py.File(tmp / "eall.h5", "r") as f:
+            assert f.attrs["fold"] == -1 and f.attrs["n_folds"] == 0
+            assert f.attrs["fold_rule"] == FOLD_RULE_NONE
+            assert (f["EVENT/fold"][...] == NO_FOLD).all() and len(
+                f["EVENT/event"]
+            ) == 2000
+        meta = export.main(
+            [
+                "--checkpoint",
+                str(ckpt),
+                "--input",
+                str(nofold),
+                "--output-dir",
+                str(tmp / "export"),
+                "--n-events",
+                "256",
+            ]
+        )
+        assert set(meta["files"]) == {"torchscript", "onnx"}
+        assert (tmp / "export" / "model_fold0.pt").exists()
+
+
 def test_finetune_recipe_from_config() -> None:
     """The three fine-tuning keys in the trainer: section, and their validation."""
     cfg = yaml.safe_load(HH4B.read_text())
@@ -591,7 +781,10 @@ def test_n_folds_rule() -> None:
             and meta["fold_rule"] == FOLD_RULE_COLUMN == "EVENT/fold"
         )
         assert meta["exclude_folds"] == [0]
-        with pytest.raises(KeyError, match="no EVENT/fold dataset"):
+        with pytest.raises(
+            SystemExit,
+            match="no EVENT/fold dataset, so fold 4 cannot be selected: pass --fold -1",
+        ):
             evaluate.main(
                 [
                     "--checkpoint",

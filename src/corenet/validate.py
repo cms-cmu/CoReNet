@@ -10,9 +10,9 @@ corenet-validate: check a configuration, and optionally an HDF5 file against it,
 2. Data (with ``--input``): every dataset the loader reads is looked up with the loader's own rules
    (``corenet.data.h5``: group aliases, used collections, computed event scalars, label keys) and its
    dtype and shape are checked; the labels must lie in 0..len(outputs), the weights must be finite,
-   the folds must exist for training (``EVENT/fold``, or ``--n-folds K`` for fold = squares(event) % K
-   from the event numbers, seed ``--fold-seed``; the report gives the fold source and the events per
-   fold); the present members
+   the folds must exist for training (``EVENT/fold`` with ids exactly 0..K-1, or ``--n-folds K`` for
+   fold = squares(event) % K from the event numbers, seed ``--fold-seed``; the report gives the fold
+   source and the events per fold); the present members
    must have finite features. Finally the actual loader (``H5Dataset``) reads the file and the network
    runs a forward pass on the first events, so a file that passes here also loads in corenet-train.
 
@@ -411,6 +411,20 @@ def check_data(
                 )
             elif length(loader.FOLD_KEY, fo):
                 column = fo[...].astype(np.int64)
+                ids = np.unique(column)
+                if not np.array_equal(ids, np.arange(len(ids))):
+                    shown = ids[:12].tolist() + (["..."] if len(ids) > 12 else [])
+                    msg = (
+                        f"{loader.FOLD_KEY}: fold ids {shown} are not 0..K-1 (the ids of K folds must be "
+                        "exactly 0..K-1; --exclude-folds next = fold (k + 1) % K): renumber the column"
+                    )
+                    if n_folds is None:
+                        report.fail(sec, msg + " or pass --n-folds K")
+                    else:
+                        report.warn(
+                            sec, msg + f"; --n-folds {n_folds} ignores the column"
+                        )
+                    column = None
         elif n_folds is None:
             report.fail(
                 sec,

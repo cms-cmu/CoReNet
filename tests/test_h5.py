@@ -3,6 +3,7 @@ order, presence flags and padding, the role selectors, the computed event scalar
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import h5py
@@ -417,8 +418,10 @@ def test_fold_rule():
 
 
 def test_missing_fold_column(tmp_path):
-    """Without EVENT/fold the loader asks for --n-folds; with it the folds come from EVENT/event."""
+    """Without EVENT/fold (and without n_folds) the file loads without folds: every fold is -1 and selecting a
+    fold asks for --n-folds; with n_folds the folds come from EVENT/event."""
     from corenet.data.folds import fold_of
+    from corenet.data.h5 import FOLD_RULE_NONE, NO_FOLD
 
     src = _need(DATA / "hh4b_small.h5")
     spec = load_config(repo / "examples/hh4b/hh4b.yaml")
@@ -437,11 +440,146 @@ def test_missing_fold_column(tmp_path):
         ):
             g.create_dataset(key, data=f[key][:500])
         event = f["EVENT/event"][:500]
-    with pytest.raises(KeyError, match="no EVENT/fold dataset; pass --n-folds"):
-        H5Dataset(dst, spec)
+    ds0 = H5Dataset(dst, spec)
+    assert not ds0.has_folds and ds0.n_folds == 0 and ds0.fold_rule == FOLD_RULE_NONE
+    assert len(ds0) == 500 and (ds0.folds.numpy() == NO_FOLD).all()
+    assert ds0[3]["fold"] == NO_FOLD and ds0.inputs["b"].shape == (500, 5, 4)
+    with pytest.raises(
+        KeyError,
+        match=r"no EVENT/fold dataset; holding out fold 0 needs .* pass --n-folds K",
+    ):
+        ds0.fold_indices(0)
+    with pytest.raises(KeyError, match="no EVENT/fold dataset; training needs"):
+        ds0.require_folds("training")
     ds = H5Dataset(dst, spec, n_folds=5)
+    assert ds.has_folds
     assert ds.n_folds == 5 and (ds.folds.numpy() == fold_of(event, 5)).all()
     with h5py.File(dst, "a") as g:
         del g["EVENT/event"]
     with pytest.raises(KeyError, match="no EVENT/event dataset"):
         H5Dataset(dst, spec, n_folds=5)
+
+
+def test_fold_ids_must_be_0_to_k(tmp_path):
+    """EVENT/fold ids must be exactly 0..K-1: with a gap K would be miscounted and `next` would pick the wrong
+    fold, so the loader refuses the column (--n-folds K still ignores it); contiguous ids give K and
+    `next` = (k + 1) % K."""
+    from synthetic import write_synthetic
+
+    from corenet.train import resolve_exclude_folds
+
+    path = write_synthetic(tmp_path / "f.h5", "hh4b", n=300)
+    spec = load_config(repo / "examples/hh4b/hh4b.yaml")
+    with h5py.File(path, "a") as f:
+        event = f["EVENT/event"][...]
+        del f["EVENT/fold"]
+        f.create_dataset("EVENT/fold", data=event % 3)
+    ds = H5Dataset(path, spec)
+    assert ds.n_folds == 3 and resolve_exclude_folds(["next"], 2, ds.n_folds) == [0]
+    assert resolve_exclude_folds(["next"], 0, ds.n_folds) == [1]
+    for bad in ([0, 1, 3], [1, 2, 3], [0, 2, 4]):
+        with h5py.File(path, "a") as f:
+            del f["EVENT/fold"]
+            f.create_dataset(
+                "EVENT/fold", data=np.array(bad, dtype=np.int64)[event % 3]
+            )
+        with pytest.raises(
+            ValueError,
+            match=re.escape(
+                f"EVENT/fold holds the fold ids {bad}; the ids of K folds must be exactly 0..K-1"
+            ),
+        ):
+            H5Dataset(path, spec)
+        assert H5Dataset(path, spec, n_folds=3).n_folds == 3  # the column is ignored
+
+
+def test_selector_sorts_at_file_precision(tmp_path):
+    """Selector columns are compared at the file's dtype: an int64 column with 16777216 and 16777217 (equal
+    once cast to float32) selects the higher one; unsigned and bool columns sort by value too (no wrap-around
+    on negation). The input tensors stay float32."""
+    from synthetic import write_synthetic
+
+    path = write_synthetic(tmp_path / "s.h5", "hh4b", n=300)
+    with h5py.File(path, "a") as f:
+        mask = f["INPUTS/Source/MASK"][...]
+        pt = f["INPUTS/Source/pt"][...]
+        n, slots = mask.shape
+        assert mask[:, :2].all()  # jets 0 and 1 are present in every event (>= 4 jets)
+        rank = np.zeros((n, slots), dtype=np.int64)
+        rank[:, 0], rank[:, 1] = 16777216, 16777217
+        f.create_dataset("INPUTS/Source/rank", data=rank)
+        low = np.full((n, slots), 2**40, dtype=np.int64)
+        low[:, 0], low[:, 1] = 16777216, 16777217
+        f.create_dataset("INPUTS/Source/low", data=low)
+        urank = np.zeros((n, slots), dtype=np.uint8)
+        urank[:, 1] = (
+            7  # jet 0 has 0: -0 wraps to 0 and would be preferred by a wrapped negation
+        )
+        f.create_dataset("INPUTS/Source/urank", data=urank)
+        flag = np.zeros((n, slots), dtype=bool)
+        flag[:, 1] = True
+        f.create_dataset("INPUTS/Source/flag", data=flag)
+    for column, kind in (("rank", "int64"), ("urank", "uint8"), ("flag", "bool")):
+        cfg = _hh4b_cfg(["pt", "eta", "phi", "mass"])
+        cfg["objects"]["b"] = f"jets {column} 4"
+        x = H5Dataset(path, parse_config(cfg)).inputs
+        assert x["b"].dtype == torch.float32 and x["b"].shape == (n, 5, 4)
+        assert np.array_equal(x["b"][:, 0, 0].numpy(), pt[:, 1]), (
+            f"{kind} column: jet 1 has the highest value"
+        )
+        if column == "rank":  # 16777216 > 0: jet 0 is second
+            assert np.array_equal(x["b"][:, 0, 1].numpy(), pt[:, 0])
+    cfg = _hh4b_cfg(["pt", "eta", "phi", "mass"])
+    cfg["objects"]["b"] = "jets low 4 lowest"
+    x = H5Dataset(path, parse_config(cfg)).inputs
+    assert np.array_equal(
+        x["b"][:, 0, 0].numpy(), pt[:, 0]
+    )  # the lowest: 16777216 is jet 0
+    assert np.array_equal(x["b"][:, 0, 1].numpy(), pt[:, 1])
+    # the b-jet selection of the example files is unchanged (float32 in the file): test_hh4b_small / test_bbww_small
+
+
+def test_context_role_extras_reach_the_network():
+    """An extra feature (btag) of the jets also enters the context objects: the context embedder has 4 + 1
+    input channels, the output depends on the btag of the `other` jets (which the network sees as context only),
+    and without the extra the embedder has 4 channels and the parameter count is the reference 1,508."""
+    from corenet.models.network import CoReNet
+
+    path = _need(DATA / "hh4b_small.h5")
+    spec4, spec5 = (
+        parse_config(_hh4b_cfg(["pt", "eta", "phi", "mass"])),
+        parse_config(_hh4b_cfg(["pt", "eta", "phi", "mass", "btag"])),
+    )
+    m4, m5 = CoReNet(spec4, device="cpu"), CoReNet(spec5, device="cpu")
+    assert m4._extras("other") == [] and m5._extras("other") == ["btag"]
+    assert m4.context["HH"].embed.embed.features == 4
+    assert m5.context["HH"].embed.embed.features == 5
+    n4, n5 = (sum(p.numel() for p in m.parameters()) for m in (m4, m5))
+    assert n4 == 1508 and n5 > n4, (n4, n5)
+    x5 = H5Dataset(path, spec5).inputs
+    batch = {k: v[:512].clone() for k, v in x5.items()}
+    m5.train()
+    m5.updateMeanStd(batch)
+    m5.initMeanStd()
+    m5.eval()
+    m5.setGhostBatches(0)
+    with torch.no_grad():
+        ref = m5(batch)
+    flipped = {k: v.clone() for k, v in batch.items()}
+    present = flipped["other"][:, -1] > 0
+    assert present.any()
+    flipped["other"][:, 4][present] = (
+        1.0 - flipped["other"][:, 4][present]
+    )  # btag of the other jets
+    assert torch.equal(flipped["b"], batch["b"]) and torch.equal(
+        flipped["event"], batch["event"]
+    )
+    with torch.no_grad():
+        out = m5(flipped)
+        again = m5(batch)
+    assert torch.isfinite(out["logits"]).all()
+    assert not torch.equal(out["logits"], ref["logits"]), (
+        "the btag of the other jets is not used"
+    )
+    assert not torch.equal(out["views"]["HH"], ref["views"]["HH"])
+    assert torch.equal(again["logits"], ref["logits"])
