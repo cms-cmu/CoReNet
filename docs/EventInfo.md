@@ -37,7 +37,8 @@ objects:
 
 * `jets`: the jet collection, with up to 12 jets per event. The listed features are the inputs of the
   network: exactly these columns of the input file ([Dataset.md](./Dataset.md)) are fed to it, `pt`,
-  `eta`, `phi` and `mass` as the kinematics and any other feature as an additional input.
+  `eta`, `phi` and `mass` as the kinematics and any other feature as an additional input. This holds
+  for every line taken from the collection, also one used only as `context:` (`other` below).
 * `b: jets btag 4`: the four jets most likely to be b jets, taken from the jet collection. The `btag`
   rule reads the `btag` column of the file for this choice only; it need not be a feature. (Listing
   `btag` under `features` would make it one more input of the network.)
@@ -118,7 +119,7 @@ written as:
 | `W_lep: [lepton, met]` | the leptonic W, formed from the lepton and the missing momentum |
 
 `context: <name>` inside a hypothesis lets its first particles (the Higgs candidates above) also see
-the jets of that name, that is, the whole event.
+the jets of that name, that is, the whole event, with all the `features` of their collection.
 
 Nothing has to be declared about symmetries or combinatorics: products of the same kind are
 interchangeable (the two b of a Higgs, the two Higgs bosons of HH) and a jet is never used twice in one

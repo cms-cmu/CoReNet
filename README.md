@@ -90,7 +90,7 @@ combine: [HH]
 
 `jets` is the jet collection: `max: 12` is the number of jet slots read per event, and the input file must
 have at least that many. The listed `features` are the inputs of the network: these columns of the input
-file, and only these, are fed to it. \
+file, and only these, are fed to it, for the `b` jets and for the `other` jets alike. \
 `jets btag 4` selects the four jets with the highest `btag` (alternatively `jets pt 4` would select the four
 leading jets): any column of the jets in the file can be used this way, and `jets mass 2 lowest` would take the
 two jets with the lowest value instead. The selector reads its column from the file for this selection only; it

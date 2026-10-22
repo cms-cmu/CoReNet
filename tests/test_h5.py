@@ -530,3 +530,43 @@ def test_selector_sorts_at_file_precision(tmp_path):
     assert np.array_equal(x["b"][:, 0, 0].numpy(), pt[:, 0])  # the lowest: 16777216 is jet 0
     assert np.array_equal(x["b"][:, 0, 1].numpy(), pt[:, 1])
     # the b-jet selection of the example files is unchanged (float32 in the file): test_hh4b_small / test_bbww_small
+
+
+def test_context_role_extras_reach_the_network():
+    """An extra feature (btag) of the jets also enters the context objects: the context embedder has 4 + 1
+    input channels, the output depends on the btag of the `other` jets (which the network sees as context only),
+    and without the extra the embedder has 4 channels and the parameter count is the reference 1,508."""
+    from corenet.models.network import CoReNet
+
+    path = _need(DATA / "hh4b_small.h5")
+    spec4, spec5 = (
+        parse_config(_hh4b_cfg(["pt", "eta", "phi", "mass"])),
+        parse_config(_hh4b_cfg(["pt", "eta", "phi", "mass", "btag"])),
+    )
+    m4, m5 = CoReNet(spec4, device="cpu"), CoReNet(spec5, device="cpu")
+    assert m4._extras("other") == [] and m5._extras("other") == ["btag"]
+    assert m4.context["HH"].embed.embed.features == 4
+    assert m5.context["HH"].embed.embed.features == 5
+    n4, n5 = (sum(p.numel() for p in m.parameters()) for m in (m4, m5))
+    assert n4 == 1508 and n5 > n4, (n4, n5)
+    x5 = H5Dataset(path, spec5).inputs
+    batch = {k: v[:512].clone() for k, v in x5.items()}
+    m5.train()
+    m5.updateMeanStd(batch)
+    m5.initMeanStd()
+    m5.eval()
+    m5.setGhostBatches(0)
+    with torch.no_grad():
+        ref = m5(batch)
+    flipped = {k: v.clone() for k, v in batch.items()}
+    present = flipped["other"][:, -1] > 0
+    assert present.any()
+    flipped["other"][:, 4][present] = 1.0 - flipped["other"][:, 4][present]  # btag of the other jets
+    assert torch.equal(flipped["b"], batch["b"]) and torch.equal(flipped["event"], batch["event"])
+    with torch.no_grad():
+        out = m5(flipped)
+        again = m5(batch)
+    assert torch.isfinite(out["logits"]).all()
+    assert not torch.equal(out["logits"], ref["logits"]), "the btag of the other jets is not used"
+    assert not torch.equal(out["views"]["HH"], ref["views"]["HH"])
+    assert torch.equal(again["logits"], ref["logits"])
