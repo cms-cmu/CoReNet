@@ -127,7 +127,14 @@ corenet-evaluate --checkpoint runs/bbww_full/model_fold0.pkl --input examples/da
     --output runs/bbww_full/eval_fold0.h5
 ```
 
+```bash
+corenet-report --run-dir runs/bbww_full --input examples/data/bbww_all.h5 --output runs/bbww_full/report.html
+```
+
+writes the results page of the run ([Report.md](./Report.md)).
+
 The commands, their options and their output files are the same as in the
 [HH → bb̄bb̄ guide](./HH4b.md). The prediction file additionally holds `views/tt` (the two tt̄
 pairings) and `heads/ttbar` (the tt̄ score), and `class_probabilities` has three columns (rest,
-signal, ttbar). The exported model takes `b`, `q`, `lepton`, `met` and `event`.
+signal, ttbar). The exported model takes `b`, `q`, `lepton`, `met` and `event`. The report adds the
+confusion matrix of the three classes, the ROC curve of every class against the rest and of the tt̄ score.

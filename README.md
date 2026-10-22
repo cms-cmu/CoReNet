@@ -21,8 +21,8 @@ pixi shell                       # activate; or prefix every command with `pixi 
 pixi itself is a single static binary (`curl -fsSL https://pixi.sh/install.sh | sh`) that needs no root
 access, so the same commands work on a laptop and on a cluster front end.
 
-This installs the command-line tools `corenet-validate`, `corenet-train`, `corenet-evaluate` and
-`corenet-export` (each has `--help`), and the Python package `corenet`. The unit tests run with
+This installs the command-line tools `corenet-validate`, `corenet-train`, `corenet-evaluate`,
+`corenet-export` and `corenet-report` (each has `--help`), and the Python package `corenet`. The unit tests run with
 `pytest tests`.
 
 ## Dependencies
@@ -35,6 +35,7 @@ This installs the command-line tools `corenet-validate`, `corenet-train`, `coren
 | h5py | 3.0 | input and prediction files |
 | PyYAML | 5.4 | configuration files |
 | scikit-learn | 1.0 | AUC / ROC in `corenet-evaluate` |
+| matplotlib | 3.5 | figures of `corenet-report` |
 | onnx, onnxruntime | 1.14, 1.15 | `corenet-export` (optional extra `export`) |
 | pytest | 7 | tests (optional extra `test`) |
 
@@ -62,9 +63,12 @@ corenet-evaluate --checkpoint runs/hh4b/model_fold0.pkl --input examples/data/hh
 # 4. export to TorchScript and ONNX, and check the exported models against PyTorch
 corenet-export --checkpoint runs/hh4b/model_fold0.pkl --input examples/data/hh4b_small.h5 \
     --output-dir runs/hh4b/export
+
+# 5. one HTML page with the training curves, ROC curves, pairings and input checks of the run
+corenet-report --run-dir runs/hh4b --input examples/data/hh4b_small.h5 --output runs/hh4b/report.html
 ```
 
-The same four commands with `bbww` in place of `hh4b` run the HH → bb̄WW example.
+The same five commands with `bbww` in place of `hh4b` run the HH → bb̄WW example.
 [docs/HH4b.md](docs/HH4b.md) walks through the HH → bb̄bb̄ example step by step;
 [docs/BBWW.md](docs/BBWW.md) does the same for HH → bb̄WW against tt̄.
 
@@ -221,6 +225,25 @@ and `event` (N, 2); for HH → bb̄WW `b` (N, 5, 2), `q` (N, 5, 2), `lepton` (N,
 | `class_probabilities` | (N, n_classes) | probability of every class, columns `["rest", <outputs>...]` |
 | `views_<hypothesis>` | (N, V) | probability of every pairing of a hypothesis with several pairings |
 | `head_<output>` | (N,) | the extra binary score of every output after the first |
+
+### Report
+
+```bash
+corenet-report --run-dir runs/bbww --input examples/data/bbww_all.h5 --output runs/bbww/report.html
+```
+
+* `--folds 0 1`: report these folds only (default: every fold found in the run directory).
+* `--max-events 500000`: events of the input file used for the input and weight distributions (random subsample above it; `0` = all).
+* `--config my_config.yaml`: event description to use instead of the one stored in the checkpoint.
+
+To see the training and validation folds in the ROC and score figures (overtraining check), first write the
+predictions of every event with `corenet-evaluate ... --output runs/bbww/eval_fold0.h5 --fold -1`.
+
+Output:
+
+| file | content |
+|---|---|
+| `report.html` | self-contained page: run summary, training curves, ROC / AUC / score distributions, view probabilities and pairing accuracy against `TARGETS`, the inputs as the network embeds them, the raw inputs, the event weights, and the list of what could not be produced ([docs/Report.md](docs/Report.md)) |
 
 ```python
 import onnxruntime as ort
