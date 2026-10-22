@@ -32,7 +32,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .checkpoint import load_checkpoint
+from .checkpoint import fold_rule_of, load_checkpoint
 from .data.h5 import H5Dataset
 
 
@@ -158,8 +158,14 @@ def main(argv=None):
     )
     model, spec, ckpt = load_checkpoint(args.checkpoint, args.config, "cpu")
     wrapper = ExportWrapper(model).eval()
+    meta = ckpt.get("metadata", {})
+    n_folds, fold_seed = fold_rule_of(meta)
     ds = H5Dataset(
-        args.input, spec, rest_order=ckpt.get("metadata", {}).get("rest_order", "pt")
+        args.input,
+        spec,
+        rest_order=meta.get("rest_order", "pt"),
+        n_folds=n_folds,
+        fold_seed=fold_seed,
     )
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

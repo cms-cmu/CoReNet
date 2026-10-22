@@ -35,7 +35,7 @@ The decay-chain part of `examples/hh4b/hh4b.yaml`:
 
 ```yaml
 objects:
-  jets:  {features: [pt, eta, phi, mass, btag], max: 12}   # INPUTS/Source (alias of "jets") in the H5 file
+  jets:  {features: [pt, eta, phi, mass], max: 12}         # INPUTS/Source (alias of "jets") in the H5 file
   b:     jets btag 4                                        # the 4 highest-btag jets
   other: jets rest 8                                        # up to 8 remaining jets
 event: [nSelJets, HT]                                       # computed from the jet collection
@@ -61,9 +61,9 @@ training:
 ### `objects`
 
 * `jets`: the jet collection, with up to 12 jets per event, read from `INPUTS/Source`. The listed
-  features are the columns to read from the input file. `btag` is only used to pick which jets are
-  treated as b-jet candidates; it is not an input to the network.
-* `b: jets btag 4`: the four jets most likely to be b jets, taken from the jet collection. When fewer
+  features are the inputs of the network: the four kinematic columns and nothing else.
+* `b: jets btag 4`: the four jets most likely to be b jets, taken from the jet collection. The rule
+  reads `INPUTS/Source/btag` for this choice only; the b tag is not an input of the network. When fewer
   than four jets are tagged, the remaining places go to untagged jets.
 * `other: jets rest 8`: up to eight of the remaining jets. Events with fewer jets are kept.
 * `event: [nSelJets, HT]`: the number of jets and their scalar momentum sum, given to the network as
@@ -122,12 +122,12 @@ In `--output-dir`:
 | `predictions_fold0.h5` | predictions on the held-out fold 0, in the layout of the evaluation below (without the ROC curve) |
 
 **All five folds.** `--fold -1` (the default) trains one model per fold in turn. To validate each
-fold on the next one, (k + 1) mod 5, run the folds one by one:
+fold on the next one, (k + 1) mod 5, run the folds one by one with `--exclude-folds next`:
 
 ```bash
 for k in 0 1 2 3 4; do
   corenet-train --config examples/hh4b/hh4b.yaml --input examples/data/hh4b_all.h5 \
-      --fold $k --exclude-folds $(( (k + 1) % 5 )) --device cuda --output-dir runs/hh4b_full
+      --fold $k --exclude-folds next --device cuda --output-dir runs/hh4b_full
 done
 ```
 
@@ -184,7 +184,7 @@ of the b jets has to be reproduced wherever the model is deployed; see Exporting
 | epochs, learning rate, decay | `--epochs`, `--lr`, `--lr-milestones`, `--lr-gamma`, `--freeze-epoch`, or the `trainer:` section | `--epochs 30 --lr-milestones 25 26 27 28 29 --freeze-epoch 25` |
 | batch size | `--batch-size-init` or `trainer: batch_size_init` | |
 | seed | `--seed` or `trainer: seed` | fold k uses seed + k |
-| validation / test folds | `--fold`, `--exclude-folds` | Training above |
+| validation / test folds | `--fold`, `--exclude-folds` (`next` = the fold after the held-out one), `--n-folds` (fold = `squares(event) % K` instead of `EVENT/fold`), `--fold-seed` | Training above |
 
 A change in `objects` or `training:` gives a different network: validate the new file with
 `corenet-validate` and retrain ([Options.md](./Options.md)).

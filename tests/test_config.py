@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import copy
 
+import pytest
+
 from corenet.models.config import ConfigError, parse_config
 
 HH4B = {
     "objects": {
-        "jets": {"features": ["pt", "eta", "phi", "mass", "btag"], "max": 12},
+        "jets": {"features": ["pt", "eta", "phi", "mass"], "max": 12},
         "b": "jets btag 4",
         "other": "jets rest 8",
     },
@@ -19,7 +21,7 @@ HH4B = {
 }
 BBWW = {
     "objects": {
-        "jets": {"features": ["pt", "eta", "phi", "mass", "btag"], "max": 12},
+        "jets": {"features": ["pt", "eta", "phi", "mass"], "max": 12},
         "b": "jets btag 2",
         "q": "jets rest 2",
         "lepton": {"features": ["pt", "eta", "phi", "mass", "isE", "isM"]},
@@ -66,6 +68,24 @@ def test_hh4b_parses():
     assert s.leaves()["b"].n == 4 and s.nodes_in("HH") == {"H1", "H2", "HH"}
 
 
+def test_selector_columns_are_not_features():
+    """A btag selector needs no btag feature: the selector reads its column from the file on its own."""
+    s = parse_config(HH4B)
+    assert s.collections["jets"].features == ["pt", "eta", "phi", "mass"]
+    assert s.selector_columns("jets") == ["btag", "pt"]
+    assert s.columns_to_read("jets") == ["pt", "eta", "phi", "mass", "btag"]
+    # btag listed as a feature is accepted and stays a feature (an ordinary extra input)
+    c = copy.deepcopy(HH4B)
+    c["objects"]["jets"]["features"] = ["pt", "eta", "phi", "mass", "btag"]
+    s = parse_config(c)
+    assert s.collections["jets"].features == ["pt", "eta", "phi", "mass", "btag"]
+    assert s.columns_to_read("jets") == ["pt", "eta", "phi", "mass", "btag"]
+    # a pt selector reads pt, which a max > 1 collection always has as a feature
+    c = copy.deepcopy(HH4B)
+    c["objects"]["b"] = "jets pt 4"
+    assert parse_config(c).columns_to_read("jets") == ["pt", "eta", "phi", "mass"]
+
+
 def test_bbww_parses():
     s = parse_config(BBWW)
     assert s.nodes["W_lep"].children == [
@@ -89,6 +109,54 @@ def test_bbww_parses():
     assert s.nodes_in("tt") == {"t_had", "t_lep", "W_had", "W_lep", "tt"}
 
 
+def test_role_grammar():
+    """<collection> <column> <n> [lowest]: any column of the file, highest first unless `lowest`; `rest` reserved."""
+    c = copy.deepcopy(HH4B)
+    c["objects"]["b"] = "jets mass 4"
+    s = parse_config(c)
+    r = s.roles["b"]
+    assert (r.selector, r.n, r.ascending, r.columns) == (
+        "mass",
+        4,
+        False,
+        ("mass", "pt"),
+    )
+    assert s.columns_to_read("jets") == [
+        "pt",
+        "eta",
+        "phi",
+        "mass",
+    ]  # mass is a feature already
+    c = copy.deepcopy(HH4B)
+    c["objects"]["b"] = "jets mass 4 lowest"
+    r = parse_config(c).roles["b"]
+    assert (r.selector, r.ascending, r.columns) == ("mass", True, ("mass", "pt"))
+    c = copy.deepcopy(HH4B)
+    c["objects"]["b"] = "jets  dnn_score   4   lowest "
+    r = parse_config(c).roles["b"]
+    assert (r.selector, r.ascending) == ("dnn_score", True) and parse_config(
+        c
+    ).columns_to_read("jets")[-1] == "dnn_score"
+    c = copy.deepcopy(HH4B)
+    c["objects"]["b"] = "jets pt 4"
+    r = parse_config(c).roles["b"]
+    assert (r.selector, r.ascending, r.columns) == ("pt", False, ("pt",))
+    assert parse_config(HH4B).roles["other"].columns == ("pt",) and parse_config(
+        HH4B
+    ).roles["b"].columns == ("btag", "pt")
+    for bad, msg in (
+        ("jets btag 4 highest", "expected '<collection> <column> <n> [lowest]'"),
+        ("jets btag 4 Lowest", "expected '<collection> <column> <n> [lowest]'"),
+        ("jets btag 4 lowest extra", "expected '<collection> <column> <n> [lowest]'"),
+        ("jets rest 8 lowest", "'rest' takes no 'lowest'"),
+        ("jets btag", "expected '<collection> <column> <n> [lowest]'"),
+        ("jets btag four", "expected '<collection> <column> <n> [lowest]'"),
+    ):
+        c = copy.deepcopy(HH4B)
+        c["objects"]["b"] = bad
+        _fails(c, msg)
+
+
 def test_validation_rules():
     c = copy.deepcopy(HH4B)
     c["combine"] = []
@@ -97,11 +165,11 @@ def test_validation_rules():
     c["objects"]["b"] = "jets btag 13"
     _fails(c, "within 1..max")
     c = copy.deepcopy(HH4B)
-    c["objects"]["b"] = "jets weird 4"
-    _fails(c, "selector must be one of")
+    c["objects"]["b"] = "jets btag 4 highest"
+    _fails(c, "expected '<collection> <column> <n> [lowest]'")
     c = copy.deepcopy(HH4B)
-    c["objects"]["jets"]["features"] = ["pt", "eta", "phi", "mass"]
-    _fails(c, "needs a 'btag' feature")
+    c["objects"]["jets"]["features"] = ["eta", "phi", "mass"]
+    _fails(c, "need pt, eta, phi features")
     c = copy.deepcopy(HH4B)
     c["hypotheses"]["HH"]["context"] = "nothing"
     _fails(c, "is not a declared role")
@@ -179,3 +247,16 @@ def test_relations_and_single_object_children():
     c = copy.deepcopy(BBWW)
     c["hypotheses"]["HH"]["H_WW"]["W_lep"] = "l + met"
     _fails(c, "the '+' form was removed; write [l, met]")
+
+
+def test_min_jets():
+    """min_jets (optional, default 4) sets the nSelJets offset; rejected unless an integer >= 2."""
+    assert parse_config(copy.deepcopy(HH4B)).min_jets == 4
+    c = copy.deepcopy(HH4B)
+    c["min_jets"] = 2
+    assert parse_config(c).min_jets == 2
+    for bad in (1, 0, "4", True, 4.0):
+        c = copy.deepcopy(HH4B)
+        c["min_jets"] = bad
+        with pytest.raises(ConfigError):
+            parse_config(c)

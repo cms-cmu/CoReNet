@@ -28,30 +28,37 @@ members are the candidate jets of the decay chain.
 
 ```yaml
 objects:
-  jets:   {features: [pt, eta, phi, mass, btag], max: 12}
+  jets:   {features: [pt, eta, phi, mass], max: 12}
   b:      jets btag 4
   other:  jets rest 8
   lepton: {features: [pt, eta, phi, mass, isE, isM]}
   met:    {features: [pt, phi]}
 ```
 
-* `jets`: the jet collection, with up to 12 jets per event. The listed features are the columns to
-  read from the input file ([Dataset.md](./Dataset.md)). `btag` is only used to pick which jets are
-  treated as b-jet candidates; it is not an input to the network.
-* `b: jets btag 4`: the four jets most likely to be b jets, taken from the jet collection.
+* `jets`: the jet collection, with up to 12 jets per event. The listed features are the inputs of the
+  network: exactly these columns of the input file ([Dataset.md](./Dataset.md)) are fed to it, `pt`,
+  `eta`, `phi` and `mass` as the kinematics and any other feature as an additional input.
+* `b: jets btag 4`: the four jets most likely to be b jets, taken from the jet collection. The `btag`
+  rule reads the `btag` column of the file for this choice only; it need not be a feature. (Listing
+  `btag` under `features` would make it one more input of the network.)
 * `other: jets rest 8`: up to eight of the remaining jets.
 * `lepton`: a single object per event (no `max`), with two extra inputs `isE` and `isM`.
 * `met`: the missing transverse momentum, a single object given by `pt` and `phi`.
 
 A collection has `features` (required) and `max` (the number of jets per event, default 1). A
 single object enters the decay chains by its own name; a collection with several jets is used
-through candidate lines of the form `<name>: <collection> <rule> <n>`:
+through candidate lines of the form `<name>: <collection> <column> <n>`, where `<column>` is any
+per-jet column of the collection's group in the input file (`btag`, `pt`, `mass`, ...):
 
-| rule | the `n` jets taken |
+| line | the `n` jets taken |
 |---|---|
-| `btag` | the `n` jets most likely to be b jets (needs a `btag` feature) |
-| `pt` | the `n` leading jets |
-| `rest` | up to `n` of the jets not taken by an earlier line |
+| `<column> <n>` | the `n` jets with the highest value of the column (`jets btag 4`: the four jets most likely to be b jets; `jets pt 4`: the four leading jets); ties go to the higher `pt` |
+| `<column> <n> lowest` | the `n` jets with the lowest value of the column (`jets mass 2 lowest`), ties again to the higher `pt` |
+| `rest <n>` | up to `n` of the jets not taken by an earlier line, leading `pt` first ([Options.md](./Options.md): `rest_order`) |
+
+`rest` is the only reserved word; every other word in that position names a column. The column (and
+`pt`) is read from the input file for the selection only and need not be a feature; the network sees
+the `features`. Nothing else may follow `<n>` but `lowest`.
 
 Lines are filled in order and a jet is used by at most one line. An event with fewer jets than needed
 is kept; the missing ones are simply absent.
@@ -64,6 +71,14 @@ event: [nSelJets, HT]
 
 Optional per-event quantities. `nSelJets` (the number of jets) and `HT` (their scalar momentum sum)
 are computed from the jet collection; any other name is read from the input file.
+
+```yaml
+min_jets: 4
+```
+
+Optional, default 4: the minimum number of jets per event in your selection. The jet multiplicity enters
+the network as `log(nSelJets - (min_jets - 1))`, so that the minimum multiplicity maps to zero; an event
+with fewer jets than `min_jets` would give a non-finite input.
 
 ## `hypotheses`
 

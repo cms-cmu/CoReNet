@@ -1,8 +1,8 @@
 # HH -> bbWW (semileptonic), with a competing ttbar hypothesis on the same objects.
 # See docs/BBWW.md.
 objects:
-  jets:   {features: [pt, eta, phi, mass, btag], max: 12}  # INPUTS/Jets
-  b:      jets btag 2                                       # the 2 highest-btag jets
+  jets:   {features: [pt, eta, phi, mass], max: 12}        # INPUTS/Jets; features = network inputs
+  b:      jets btag 2                                       # the 2 highest-btag jets (reads INPUTS/Jets/btag for the selection only)
   q:      jets rest 2                                       # the 2 leading remaining jets
   lepton: {features: [pt, eta, phi, mass, isE, isM]}        # INPUTS/Lepton, a single object (max 1)
   met:    {features: [pt, phi]}                             # INPUTS/Met, a single object (max 1)

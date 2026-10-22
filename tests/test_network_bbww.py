@@ -30,9 +30,10 @@ def make_inputs(n=64, seed=0, pad_q=False):
         eta = 4.8 * torch.rand(n, k, generator=g) - 2.4
         phi = math.tau * torch.rand(n, k, generator=g) - math.pi
         m = 5 + 20 * torch.rand(n, k, generator=g)
-        btag = torch.rand(n, k, generator=g)
         flag = torch.ones(n, k)
-        return torch.stack([pt, eta, phi, m, btag, flag], dim=1)  # (n, 5+1, k)
+        return torch.stack(
+            [pt, eta, phi, m, flag], dim=1
+        )  # (n, 4+1, k): the features + flag
 
     b, q = jets(2), jets(2)
     if pad_q:  # second q jet missing
@@ -201,7 +202,7 @@ def test_padded_leaves_stay_finite():
 def test_relation_needs_unique_candidates():
     cfg = {
         "objects": {
-            "jets": {"features": ["pt", "eta", "phi", "mass", "btag"], "max": 12},
+            "jets": {"features": ["pt", "eta", "phi", "mass"], "max": 12},
             "b": "jets btag 2",
             "q": "jets rest 2",
             "lepton": {"features": ["pt", "eta", "phi", "mass"]},
@@ -300,6 +301,7 @@ def test_self_attention_masks_diagonal_only():
 def test_edge_with_many_keys_is_attention():
     """An edge whose queries have several admissible keys stays real attention: HH -> 4b dijets attending to
     the other dijets (6 candidates, diagonal masked -> 5 keys each)."""
+    # btag listed as a feature here: it is one more input channel (the 5th of the 6 stacked below)
     cfg = {
         "objects": {
             "jets": {"features": ["pt", "eta", "phi", "mass", "btag"], "max": 12},

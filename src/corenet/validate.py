@@ -10,9 +10,11 @@ corenet-validate: check a configuration, and optionally an HDF5 file against it,
 2. Data (with ``--input``): every dataset the loader reads is looked up with the loader's own rules
    (``corenet.data.h5``: group aliases, used collections, computed event scalars, label keys) and its
    dtype and shape are checked; the labels must lie in 0..len(outputs), the weights must be finite,
-   the folds must exist for training; the present members must have finite features. Finally the
-   actual loader (``H5Dataset``) reads the file and the network runs a forward pass on the first
-   events, so a file that passes here also loads in corenet-train.
+   the folds must exist for training (``EVENT/fold``, or ``--n-folds K`` for fold = squares(event) % K
+   from the event numbers, seed ``--fold-seed``; the report gives the fold source and the events per
+   fold); the present members
+   must have finite features. Finally the actual loader (``H5Dataset``) reads the file and the network
+   runs a forward pass on the first events, so a file that passes here also loads in corenet-train.
 
 Every finding is printed as OK / WARN / FAIL with the dataset or key it concerns; the exit status is 1
 when anything FAILed. ``--json`` also writes the report as JSON.
@@ -30,7 +32,14 @@ import numpy as np
 import torch
 
 from .data import h5 as loader
-from .models.config import ConfigError, NetworkSpec, parse_config, read_config_dict
+from .data.folds import FOLD_SEED, fold_of, fold_rule
+from .models.config import (
+    REST,
+    ConfigError,
+    NetworkSpec,
+    parse_config,
+    read_config_dict,
+)
 from .models.network import CoReNet
 
 
@@ -116,10 +125,20 @@ def check_config(path, report: Report) -> NetworkSpec | None:
         return None
 
     for c in spec.collections.values():
-        report.ok(sec, f"collection `{c.name}`: max {c.max}, features {c.features}")
-    for r in spec.roles.values():
         report.ok(
-            sec, f"role `{r.name}`: {r.n} x `{r.collection}` selected by `{r.selector}`"
+            sec,
+            f"collection `{c.name}`: max {c.max}, features {c.features} (the network inputs)",
+        )
+    for r in spec.roles.values():
+        how = (
+            ""
+            if r.selector == REST
+            else (" lowest first" if r.ascending else " highest first")
+        )
+        report.ok(
+            sec,
+            f"role `{r.name}`: {r.n} x `{r.collection}` selected by `{r.selector}`{how} "
+            f"(reads {', '.join(r.columns)} for the selection)",
         )
     for h, T in model.tables.items():
         nodes = ", ".join(f"{n} ({T.nodes[n].n})" for n in model.levels[h])
@@ -160,6 +179,8 @@ def check_data(
     report: Report,
     rest_order: str = "pt",
     n_forward: int = 512,
+    n_folds: int | None = None,
+    fold_seed: int = FOLD_SEED,
 ) -> None:
     sec = f"data {path}"
     try:
@@ -208,12 +229,26 @@ def check_data(
                 continue
             group = f["INPUTS"][gname]
             slots = None
-            for feat in coll.features:
+            columns = loader.columns_to_read(spec, coll)
+            selection = [
+                c for c in columns if c not in coll.features
+            ]  # read for a selector only
+            for feat in columns:
                 name = f"INPUTS/{gname}/{feat}"
+                readers = [
+                    f"`{r.name}`"
+                    for r in spec.roles.values()
+                    if r.collection == coll.name and feat in r.columns
+                ]
+                why = (
+                    f" (read for the selection by {', '.join(readers)}, not a feature)"
+                    if feat in selection
+                    else ""
+                )
                 if feat not in group or not isinstance(group[feat], h5py.Dataset):
                     report.fail(
                         sec,
-                        f"{who} expects dataset {name}: not found (INPUTS/{gname} has {sorted(group)})",
+                        f"{who} expects dataset {name}{why}: not found (INPUTS/{gname} has {sorted(group)})",
                     )
                     continue
                 ds = group[feat]
@@ -273,17 +308,28 @@ def check_data(
             note = f"; {', '.join(missing_kin)} taken as 0" if missing_kin else ""
             report.ok(
                 sec,
-                f"{who}: INPUTS/{gname} with {coll.features}"
+                f"{who}: INPUTS/{gname} with features {coll.features}"
                 + (f", {slots} slots" if slots else "")
                 + note,
             )
+            if selection:
+                report.ok(
+                    sec,
+                    f"{who}: {selection} read for the selection only (not network inputs)",
+                )
 
         # ---- event scalars
         for name in spec.event:
             kind, where = loader.event_source(spec, name)
             if kind == "computed":
+                note = (
+                    f" and enters as log({name} - {spec.min_jets - 1}) (min_jets {spec.min_jets})"
+                    if "nSelJets" in name
+                    else ""
+                )
                 report.ok(
-                    sec, f"event scalar `{name}` computed from collection `{where}`"
+                    sec,
+                    f"event scalar `{name}` computed from collection `{where}`{note}",
                 )
             elif where not in f:
                 report.fail(
@@ -355,13 +401,8 @@ def check_data(
                             f"{loader.WEIGHT_KEY}: {n_neg:,} negative weights ({n_neg / len(wv):.3g} of the "
                             "events); they count as 0 in the loss and in the metrics",
                         )
-        if loader.FOLD_KEY not in f:
-            report.fail(
-                sec,
-                f"{loader.FOLD_KEY} not found: corenet-train needs a fold index per event "
-                "(the loader would put every event in fold 0)",
-            )
-        else:
+        column = None  # EVENT/fold, when present and well-formed
+        if loader.FOLD_KEY in f:
             fo = f[loader.FOLD_KEY]
             if fo.dtype.kind not in "iu" or fo.ndim != 1:
                 report.fail(
@@ -369,15 +410,50 @@ def check_data(
                     f"{loader.FOLD_KEY}: shape {fo.shape} dtype {fo.dtype}, expected integer (events,)",
                 )
             elif length(loader.FOLD_KEY, fo):
-                vals, cnt = np.unique(fo[...], return_counts=True)
-                report.ok(
+                column = fo[...].astype(np.int64)
+        elif n_folds is None:
+            report.fail(
+                sec,
+                f"{loader.FOLD_KEY} not found: corenet-train needs a fold index per event; "
+                "pass --n-folds K to use fold = squares(event) % K from EVENT/event",
+            )
+        folds, source = None, None
+        if n_folds is not None:
+            source = f"{fold_rule(n_folds, fold_seed)} (--n-folds)"
+            if loader.EVENT_KEY not in f:
+                report.fail(
                     sec,
-                    f"{loader.FOLD_KEY}: folds {dict(zip(vals.tolist(), cnt.tolist()))}",
+                    f"folds = {source}: {loader.EVENT_KEY} not found",
                 )
-                if len(vals) < 2:
+            else:
+                try:
+                    folds = fold_of(f[loader.EVENT_KEY][...], n_folds, fold_seed)
+                except ValueError as e:
+                    report.fail(sec, f"folds = {source}: {e}")
+        elif column is not None:
+            folds, source = column, loader.FOLD_KEY
+        if folds is not None:
+            vals, cnt = np.unique(folds, return_counts=True)
+            report.ok(
+                sec,
+                f"folds from {source}: events per fold {dict(zip(vals.tolist(), cnt.tolist()))}",
+            )
+            if len(vals) < 2:
+                report.warn(
+                    sec,
+                    f"folds from {source}: a single fold; training on fold k uses the other folds",
+                )
+            if n_folds is not None and column is not None:
+                n_diff = int((column != folds).sum())
+                if n_diff:
                     report.warn(
                         sec,
-                        f"{loader.FOLD_KEY}: a single fold; training on fold k uses the other folds",
+                        f"{loader.FOLD_KEY} disagrees with {fold_rule(n_folds, fold_seed)} for "
+                        f"{n_diff:,} of {len(folds):,} events; corenet-train --n-folds {n_folds} ignores the column",
+                    )
+                else:
+                    report.ok(
+                        sec, f"{loader.FOLD_KEY} equals {fold_rule(n_folds, fold_seed)}"
                     )
         if loader.EVENT_KEY not in f:
             report.warn(
@@ -389,7 +465,9 @@ def check_data(
         return
     # ---- the actual loader and a forward pass
     try:
-        ds = loader.H5Dataset(path, spec, rest_order=rest_order)
+        ds = loader.H5Dataset(
+            path, spec, rest_order=rest_order, n_folds=n_folds, fold_seed=fold_seed
+        )
     except Exception as e:
         report.fail(sec, f"the loader (H5Dataset) fails: {type(e).__name__}: {e}")
         return
@@ -459,12 +537,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="ordering of the 'rest' selector (default: the trainer section, else pt)",
     )
     p.add_argument(
+        "--n-folds",
+        type=int,
+        default=None,
+        help="report the fold = squares(event) %% K split of EVENT/event (as corenet-train --n-folds K "
+        "uses) instead of the EVENT/fold column",
+    )
+    p.add_argument(
+        "--fold-seed",
+        type=int,
+        default=FOLD_SEED,
+        help=f"seed of the squares(event) %% K rule [{FOLD_SEED}, the seed of the example files]",
+    )
+    p.add_argument(
         "--json", default=None, help="also write the report to this JSON file"
     )
     return p
 
 
-def validate(config, data=None, rest_order=None) -> Report:
+def validate(
+    config, data=None, rest_order=None, n_folds=None, fold_seed=FOLD_SEED
+) -> Report:
     report = Report()
     spec = check_config(config, report)
     if spec is not None and data is not None:
@@ -475,7 +568,14 @@ def validate(config, data=None, rest_order=None) -> Report:
                 )
             except Exception:
                 rest_order = "pt"
-        check_data(data, spec, report, rest_order=rest_order)
+        check_data(
+            data,
+            spec,
+            report,
+            rest_order=rest_order,
+            n_folds=n_folds,
+            fold_seed=fold_seed,
+        )
     elif data is not None:
         report.fail(f"data {data}", "not checked: the configuration is invalid")
     return report
@@ -483,7 +583,11 @@ def validate(config, data=None, rest_order=None) -> Report:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    report = validate(args.config, args.input, args.rest_order)
+    if args.n_folds is not None and args.n_folds < 1:
+        build_parser().error(f"--n-folds must be >= 1, got {args.n_folds}")
+    report = validate(
+        args.config, args.input, args.rest_order, args.n_folds, args.fold_seed
+    )
     report.print()
     if args.json:
         Path(args.json).write_text(json.dumps(report.to_dict(), indent=1))

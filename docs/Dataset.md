@@ -29,8 +29,8 @@ event description. Next to each key is the expected shape and data type.
 - EVENT
 ---- label        : [NUM_EVENTS, ]           : int      (or CLASSIFICATIONS/EVENT/signal)
 ---- weight       : [NUM_EVENTS, ]           : float    (optional)
----- fold         : [NUM_EVENTS, ]           : int      (needed for training)
----- event        : [NUM_EVENTS, ]           : int      (optional event identifier)
+---- fold         : [NUM_EVENTS, ]           : int      (optional: cross-validation fold; else --n-folds)
+---- event        : [NUM_EVENTS, ]           : int      (event number; needed with --n-folds)
 ---- other_scalar : [NUM_EVENTS, ]           : float    (any quantity named under `event:`)
 ```
 
@@ -44,9 +44,11 @@ of shape `[NUM_EVENTS, MAX_JETS]`. Every event is stored with the same number of
 slot with `False`. Store all jets of the event, not only the b-jet candidates: which jets are the b
 jets is decided by the event description when the file is loaded, so one file serves any choice.
 
-The feature names are the ones used in the event description. `pt`, `eta`, `phi` and `mass` are the
-kinematics; `btag` is only used to pick the b-jet candidates; any other feature (`isE`, `isM`, ...) is
-an additional input for that object.
+The column names are the ones used in the event description. The columns listed as `features` there
+are the inputs of the network: `pt`, `eta`, `phi` and `mass` are the kinematics, any other feature
+(`isE`, `isM`, ...) is an additional input for that object. Any column of a collection can be named in a
+candidate line (`btag` for `b: jets btag 4`, [EventInfo.md](./EventInfo.md)); it is read for that choice
+only and need not be a feature; listing it under `features` would make it an input as well.
 
 ## Single objects
 
@@ -65,9 +67,18 @@ A collection named `x` is read from `INPUTS/x`, matched case-insensitively, or f
   of the event description in order (`1` = signal in both examples).
 * **Weights.** `EVENT/weight` is the event weight (1 when absent). Each class is normalised during
   training, so only the relative weights within a class matter. Negative weights count as 0.
-* **Folds.** `EVENT/fold` is the cross-validation fold of the event. `corenet-train --fold k` holds
-  out fold `k` for testing and `--exclude-folds j` uses fold `j` for validation.
-* **Event identifier.** `EVENT/event` is copied to the prediction files.
+* **Folds.** The cross-validation fold of an event is `EVENT/fold` when the file has that column.
+  Without it, pass `--n-folds K` to `corenet-train` (and to `corenet-validate`): the fold is then
+  `squares(event) % K`, a hash of the event number in `EVENT/event` (integers ≥ 0) with the Squares
+  counter-based generator (`corenet.data.folds.fold_of`; `--fold-seed`, default 0, selects the hash
+  key), so any subset of a sample gets the same folds and no random split is ever made. With
+  `--n-folds K` an existing `EVENT/fold` column is ignored. The rule used (`EVENT/fold` or
+  `squares(event) % n_folds`), the number of folds and the seed are stored in the checkpoint, so
+  `corenet-evaluate` applies the same rule to any file. `corenet-train --fold k` holds out fold `k`
+  for testing and `--exclude-folds j` uses fold `j` for validation (`--exclude-folds next`: fold
+  `(k + 1) % n_folds`).
+* **Event identifier.** `EVENT/event` is copied to the prediction files and is the input of the
+  `squares(event) % n_folds` rule.
 
 ## Example
 
@@ -82,9 +93,14 @@ follow this layout:
   `EVENT/event`.
 
 They are random subsamples of the full files `hh4b_all.h5` and `bbww_all.h5`, written with
-`python scripts/make_small_h5.py <full> <small> --events 20000`. Check any file against an event
-description with
+`python scripts/make_small_h5.py <full> <small> --events 20000`. Their `EVENT/fold` column equals the
+fold rule with 5 folds and seed 0 (`--n-folds 5 --fold-seed 0`), so the column and `--n-folds 5`
+give the same folds on these files; `corenet-validate --n-folds 5` reports that agreement. Check any
+file against an event description with
 
 ```bash
 corenet-validate --config examples/bbww/bbww.yaml --input examples/data/bbww_small.h5
 ```
+
+On a machine without a GPU (no CUDA driver), prefix the command with `CONDA_OVERRIDE_CUDA=12.0`; the
+validator only reads the file.

@@ -28,7 +28,7 @@ The decay-chain part of `examples/bbww/bbww.yaml`:
 
 ```yaml
 objects:
-  jets:   {features: [pt, eta, phi, mass, btag], max: 12}  # INPUTS/Jets
+  jets:   {features: [pt, eta, phi, mass], max: 12}        # INPUTS/Jets
   b:      jets btag 2                                       # the 2 highest-btag jets
   q:      jets rest 2                                       # the 2 leading remaining jets
   lepton: {features: [pt, eta, phi, mass, isE, isM]}        # INPUTS/Lepton, a single object (max 1)
@@ -70,8 +70,10 @@ training:
 
 ### `objects`
 
-* `jets`: the jet collection, up to 12 jets per event, read from `INPUTS/Jets`.
-* `b: jets btag 2`: the two jets most likely to be b jets.
+* `jets`: the jet collection, up to 12 jets per event, read from `INPUTS/Jets`; the four kinematic
+  columns are its network inputs.
+* `b: jets btag 2`: the two jets most likely to be b jets; the rule reads `INPUTS/Jets/btag` for this
+  choice only.
 * `q: jets rest 2`: the two leading remaining jets, the light-quark jets.
 * `lepton`: a single object per event; `isE` and `isM` tell the network whether it is an electron or a
   muon.

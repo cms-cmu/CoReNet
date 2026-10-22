@@ -10,7 +10,10 @@ or in the optional ``trainer:`` section of the configuration, see docs/Options.m
   * ``epochs`` (20) epochs; batch size ``batch_size_init`` (1024) at epoch 0, doubled at epochs
     1, 3, 6 and 10, with (64, 16, 4, 1, 0) ghost batches;
   * the input normalisation of every embedder is frozen from the training set before epoch 0;
-  * at epoch ``freeze_epoch`` (15) every parameter except the output heads is frozen;
+  * at epoch ``freeze_epoch`` (15) the fine-tuning stage starts: every parameter whose name does not
+    start with one of the ``finetune_layers`` prefixes (the output heads) is frozen; ``finetune_lr``
+    and ``finetune_batch_size`` (unset: the schedule continues) set the learning rate, from which the
+    milestones continue, and the batch size of that stage;
   * per-class weight normalisation (``class_norm``): the event weights of every class sum to 1 over
     the training set; weights are clamped at >= 0 inside the loss.
 
@@ -18,6 +21,10 @@ Loss = weighted cross entropy over ``spec.classes`` (0 = rest, 1 = first output,
 the main logits, plus, for every further output ``o``, ``head_weights.get(o, 1.0)`` times a weighted
 binary cross entropy of its head against ``label == class index of o``. The view (candidate
 selection) scores are not supervised.
+
+Folds: ``EVENT/fold`` of the file, or ``--n-folds K`` for fold = squares(event) % K from the event
+numbers (``corenet.data.folds.fold_of``, seed ``--fold-seed``, 0 = the rule of the example files);
+``--exclude-folds next`` is the fold (k + 1) % n_folds of held-out fold k.
 
 For each held-out fold k this writes, in ``--output-dir``:
     model_fold{k}.pkl          checkpoint: state dict, configuration, classes and metadata
@@ -38,6 +45,7 @@ import torch
 import torch.nn.functional as F
 
 from .checkpoint import save_checkpoint
+from .data.folds import FOLD_SEED
 from .data.h5 import H5Dataset
 from .evaluate import Batches, count_parameters, predict, write_predictions
 from .models.config import ConfigError, NetworkSpec, parse_config, read_config_dict
@@ -47,7 +55,8 @@ HEAD_PREFIXES = (
     "head_main.",
     "head_reduce.",
     "aux_heads.",
-)  # trainable after the freeze epoch
+)  # default finetune_layers: trainable after the freeze epoch
+NO_FINETUNE_LAYERS = "none"  # --finetune-layers none: freeze nothing
 MIN_GHOST_BATCH_SIZE = 8  # single-pixel GBNs go NaN with one-event ghost batches
 
 # training-recipe options: name -> default. Settable in the `trainer:` section of the configuration;
@@ -62,6 +71,10 @@ RECIPE_DEFAULTS = {
     "class_norm": True,
     "seed": 42,
     "rest_order": "pt",
+    "early_stop_patience": 0,
+    "finetune_layers": list(HEAD_PREFIXES),
+    "finetune_lr": None,
+    "finetune_batch_size": None,
 }
 
 
@@ -83,13 +96,46 @@ def batch_schedule(epoch: int, bs_init: int) -> tuple[int, int]:
     return bs, min(n_gb, max(1, bs // MIN_GHOST_BATCH_SIZE))  # no-op for bs_init >= 512
 
 
-def freeze_heads(model: CoReNet) -> int:
-    """Freeze everything but the output heads (head_main, head_reduce, aux_heads); returns #trainable."""
-    n = 0
+def finetune_batch(epoch: int, bs_init: int, finetune_batch_size: int | None):
+    """(batch size, ghost batches) of the fine-tuning stage: ``finetune_batch_size`` when set (ghost batches
+    capped so that none has fewer than MIN_GHOST_BATCH_SIZE events, 0 stays 0), else the schedule."""
+    bs, n_gb = batch_schedule(epoch, bs_init)
+    if finetune_batch_size is None:
+        return bs, n_gb
+    bs = finetune_batch_size
+    return bs, min(n_gb, max(1, bs // MIN_GHOST_BATCH_SIZE))
+
+
+def freeze_heads(model: CoReNet, prefixes=HEAD_PREFIXES) -> int:
+    """Freeze every parameter whose name does not start with one of ``prefixes`` (default: the output heads
+    head_main, head_reduce, aux_heads); parameters that are non-trainable by construction stay so.
+    Returns the number of trainable parameters."""
+    prefixes = tuple(prefixes)
     for name, param in model.named_parameters():
-        param.requires_grad = name.startswith(HEAD_PREFIXES)
-        n += int(param.requires_grad) * param.numel()
-    return n
+        if not name.startswith(prefixes):
+            param.requires_grad = False
+    return count_trainable(model)
+
+
+def count_trainable(model: torch.nn.Module) -> int:
+    return int(sum(p.numel() for p in model.parameters() if p.requires_grad))
+
+
+def parse_finetune_layers(value) -> list[str]:
+    """``finetune_layers`` as a list of prefixes: a list of strings, or ``none`` (alone) for an empty list."""
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list) or not all(isinstance(e, str) and e for e in value):
+        raise ConfigError(
+            f"trainer.finetune_layers must be a list of parameter-name prefixes or 'none', got {value!r}"
+        )
+    if NO_FINETUNE_LAYERS in value:
+        if len(value) > 1:
+            raise ConfigError(
+                f"trainer.finetune_layers: 'none' cannot be combined with prefixes, got {value!r}"
+            )
+        return []
+    return list(value)
 
 
 def normalize_class_weights(
@@ -183,8 +229,9 @@ def train_fold(
     labels = ds.labels.numpy()
     train_idx, test_idx = ds.fold_indices(fold)
     val_idx = train_idx[:0]
-    if args.exclude_folds:
-        keep = ~np.isin(ds.folds.numpy()[train_idx], args.exclude_folds)
+    exclude_folds = resolve_exclude_folds(args.exclude_folds, fold, ds.n_folds)
+    if exclude_folds:
+        keep = ~np.isin(ds.folds.numpy()[train_idx], exclude_folds)
         val_idx, train_idx = train_idx[~keep], train_idx[keep]
     weights = (
         normalize_class_weights(labels, ds.weights, train_idx, n_classes)
@@ -224,14 +271,54 @@ def train_fold(
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     recipe = {k: getattr(args, k) for k in RECIPE_DEFAULTS}
+    # trainable parameters of the fine-tuning stage, set at the freeze epoch
+    n_trainable = None
+
+    def metadata(epoch: int) -> dict:
+        return {
+            "fold": fold,
+            "epoch": epoch,
+            "exclude_folds": exclude_folds,
+            "input": str(args.input),
+            "n_folds": ds.n_folds,
+            "fold_rule": ds.fold_rule,
+            "fold_seed": ds.fold_seed,
+            **recipe,
+            "finetune_trainable_parameters": n_trainable,
+        }
+
     history, history_path = [], out_dir / f"history_fold{fold}.json"
+    best_auc, best_epoch, best_state, bad, stopped = (
+        None,
+        None,
+        None,
+        0,
+        False,
+    )  # early stopping state
     for epoch in range(args.epochs):
-        bs, n_gb = batch_schedule(epoch, args.batch_size_init)
+        bs, n_gb = (
+            finetune_batch(epoch, args.batch_size_init, args.finetune_batch_size)
+            if epoch >= args.freeze_epoch
+            else batch_schedule(epoch, args.batch_size_init)
+        )
         model.setGhostBatches(n_gb)
         if epoch == args.freeze_epoch:
-            n_trainable = freeze_heads(model)
+            if args.finetune_layers:
+                n_trainable = freeze_heads(model, args.finetune_layers)
+            else:
+                n_trainable = count_trainable(model)
+            if args.finetune_lr is not None:
+                for group in optimizer.param_groups:
+                    group["lr"] = args.finetune_lr
             logging.info(
-                f"fold {fold}: frozen at epoch {epoch}, {n_trainable:,} trainable head parameters"
+                f"fold {fold}: fine-tuning from epoch {epoch}: trainable layers "
+                + (
+                    f"{args.finetune_layers}"
+                    if args.finetune_layers
+                    else "all (nothing frozen)"
+                )
+                + f", {n_trainable:,} trainable parameters, lr {optimizer.param_groups[0]['lr']:.2e}, "
+                f"batch size {bs}, {n_gb} ghost batches"
             )
         model.train()
         loss_sum, w_sum = 0.0, 0.0
@@ -253,13 +340,7 @@ def train_fold(
                 model,
                 config,
                 args.config,
-                {
-                    "fold": fold,
-                    "epoch": epoch,
-                    "exclude_folds": args.exclude_folds,
-                    "input": str(args.input),
-                    **recipe,
-                },
+                metadata(epoch),
             )
         entry = {
             "epoch": epoch,
@@ -276,10 +357,14 @@ def train_fold(
             json.dumps(
                 {
                     "fold": fold,
-                    "exclude_folds": args.exclude_folds,
+                    "exclude_folds": exclude_folds,
+                    "n_folds": ds.n_folds,
+                    "fold_rule": ds.fold_rule,
+                    "fold_seed": ds.fold_seed,
                     "config": str(args.config),
                     "classes": spec.classes,
                     "recipe": recipe,
+                    "finetune_trainable_parameters": n_trainable,
                     "n_train": len(train_idx),
                     "n_val": len(val_idx),
                     "history": history,
@@ -295,21 +380,43 @@ def train_fold(
                 else ""
             )
         )
+        if args.early_stop_patience and len(val_idx):
+            auc = entry.get("val_auc")
+            if auc is not None and (best_auc is None or auc > best_auc):
+                best_auc, best_epoch, bad = auc, epoch, 0
+                best_state = {
+                    k: v.detach().clone() for k, v in model.state_dict().items()
+                }
+            else:
+                bad += 1
+            if bad >= args.early_stop_patience:
+                stopped = True
+                logging.info(
+                    f"fold {fold}: early stopping after epoch {epoch}: the validation AUC did not improve for "
+                    f"{bad} epochs (best {best_auc:.5f} at epoch {best_epoch})"
+                )
+                break
 
+    final_epoch = args.epochs - 1 if not stopped else epoch
+    if args.early_stop_patience and best_state is not None:
+        model.load_state_dict(
+            best_state
+        )  # keep the weights of the best validation epoch
+        final_epoch = best_epoch
+        doc = json.loads(history_path.read_text())
+        doc.update(
+            {
+                "best_epoch": best_epoch,
+                "stopped_after_epoch": epoch if stopped else None,
+                "early_stop_patience": args.early_stop_patience,
+            }
+        )
+        history_path.write_text(json.dumps(doc, indent=1))
+        logging.info(
+            f"fold {fold}: keeping the weights of epoch {best_epoch} (validation AUC {best_auc:.5f})"
+        )
     ckpt = out_dir / f"model_fold{fold}.pkl"
-    save_checkpoint(
-        ckpt,
-        model,
-        config,
-        args.config,
-        {
-            "fold": fold,
-            "epoch": args.epochs - 1,
-            "exclude_folds": args.exclude_folds,
-            "input": str(args.input),
-            **recipe,
-        },
-    )
+    save_checkpoint(ckpt, model, config, args.config, metadata(final_epoch))
     probs, views, heads = predict(model, data, test_idx)
     write_predictions(
         out_dir / f"predictions_fold{fold}.h5",
@@ -324,6 +431,9 @@ def train_fold(
             "config": str(Path(args.config).resolve()),
             "n_parameters": count_parameters(model),
             "fold": fold,
+            "n_folds": ds.n_folds,
+            "fold_rule": ds.fold_rule,
+            "fold_seed": ds.fold_seed,
         },
     )
     logging.info(
@@ -352,11 +462,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="held-out (test) fold, or -1 for every fold in turn",
     )
     p.add_argument(
-        "--exclude-folds",
+        "--n-folds",
         type=int,
+        default=None,
+        help="use fold = squares(event) %% K computed from EVENT/event instead of the EVENT/fold column",
+    )
+    p.add_argument(
+        "--fold-seed",
+        type=int,
+        default=FOLD_SEED,
+        help=f"seed of the squares(event) %% K rule [{FOLD_SEED}, the seed of the example files]",
+    )
+    p.add_argument(
+        "--exclude-folds",
+        type=exclude_fold,
         nargs="*",
         default=[],
-        help="folds left out of training and used for per-epoch validation",
+        help="folds left out of training and used for per-epoch validation; "
+        "`next` = the fold (k + 1) %% n_folds of the held-out fold k",
     )
     g = p.add_argument_group(
         "training recipe (default: the `trainer:` section of --config, else the built-in value)"
@@ -367,7 +490,25 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument(
         "--freeze-epoch",
         type=int,
-        help=f"epoch at which all but the output heads are frozen [{RECIPE_DEFAULTS['freeze_epoch']}]",
+        help="epoch at which the fine-tuning stage starts: all but --finetune-layers are frozen "
+        f"[{RECIPE_DEFAULTS['freeze_epoch']}]",
+    )
+    g.add_argument(
+        "--finetune-layers",
+        nargs="+",
+        metavar="PREFIX",
+        help="parameter-name prefixes that stay trainable from --freeze-epoch on, or `none` to freeze "
+        f"nothing [{' '.join(HEAD_PREFIXES)}]",
+    )
+    g.add_argument(
+        "--finetune-lr",
+        type=float,
+        help="learning rate set at --freeze-epoch; the milestones continue from it [keep the schedule]",
+    )
+    g.add_argument(
+        "--finetune-batch-size",
+        type=int,
+        help="batch size from --freeze-epoch on [keep the schedule]",
     )
     g.add_argument(
         "--lr", type=float, help=f"Adam learning rate [{RECIPE_DEFAULTS['lr']}]"
@@ -400,6 +541,12 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"random seed (the seed of fold k is seed + k) [{RECIPE_DEFAULTS['seed']}]",
     )
     g.add_argument(
+        "--early-stop-patience",
+        type=int,
+        help="stop when the validation AUC has not improved for this many epochs "
+        f"and keep the weights of the best epoch; 0 = train every epoch; needs --exclude-folds [{RECIPE_DEFAULTS['early_stop_patience']}]",
+    )
+    g.add_argument(
         "--rest-order",
         choices=["pt", "selector"],
         help="ordering of the 'rest' selector [pt]",
@@ -415,6 +562,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="torch device; falls back to cpu when CUDA is unavailable",
     )
     return p
+
+
+def exclude_fold(text: str):
+    """An --exclude-folds entry: a fold number or the word `next`."""
+    if text == "next":
+        return text
+    try:
+        return int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected a fold number or `next`, got {text!r}"
+        ) from None
+
+
+def resolve_exclude_folds(entries: list, fold: int, n_folds: int) -> list[int]:
+    """The validation folds of held-out fold ``fold``: `next` becomes (fold + 1) % n_folds."""
+    return [(fold + 1) % n_folds if e == "next" else int(e) for e in entries]
 
 
 def _check_recipe(r: dict) -> None:
@@ -439,6 +603,16 @@ def _check_recipe(r: dict) -> None:
         "class_norm": (lambda x: isinstance(x, bool), "true or false"),
         "seed": (lambda x: is_int(x), "an integer"),
         "rest_order": (lambda x: x in ("pt", "selector"), "'pt' or 'selector'"),
+        "early_stop_patience": (lambda x: is_int(x) and x >= 0, "an integer >= 0"),
+        "finetune_layers": (
+            lambda x: isinstance(x, list) and all(isinstance(e, str) and e for e in x),
+            "a list of parameter-name prefixes (or 'none')",
+        ),
+        "finetune_lr": (lambda x: x is None or (is_num(x) and x > 0), "a number > 0"),
+        "finetune_batch_size": (
+            lambda x: x is None or (is_int(x) and x >= 1),
+            "an integer >= 1",
+        ),
     }
     for key, (ok, what) in rules.items():
         if key in r and not ok(r[key]):
@@ -458,6 +632,7 @@ def resolve_recipe(args, config: dict):
     for key, default in RECIPE_DEFAULTS.items():
         if getattr(args, key) is None:
             setattr(args, key, section.get(key, default))
+    args.finetune_layers = parse_finetune_layers(args.finetune_layers)
     _check_recipe({k: getattr(args, k) for k in RECIPE_DEFAULTS})
     return args
 
@@ -470,14 +645,26 @@ def main(argv=None):
     config = read_config_dict(args.config)
     spec = parse_config(config)
     resolve_recipe(args, config)
+    if args.early_stop_patience and not args.exclude_folds:
+        build_parser().error(
+            "--early-stop-patience needs a validation fold: pass --exclude-folds"
+        )
+    if args.n_folds is not None and args.n_folds < 1:
+        build_parser().error(f"--n-folds must be >= 1, got {args.n_folds}")
     device = torch.device(
         args.device
         if torch.cuda.is_available() and args.device.startswith("cuda")
         else "cpu"
     )
-    ds = H5Dataset(args.input, spec, rest_order=args.rest_order)
+    ds = H5Dataset(
+        args.input,
+        spec,
+        rest_order=args.rest_order,
+        n_folds=args.n_folds,
+        fold_seed=args.fold_seed,
+    )
     logging.info(
-        f"{args.input}: {len(ds):,} events, device={device}, recipe "
+        f"{args.input}: {len(ds):,} events, {ds.n_folds} folds ({ds.fold_rule}), device={device}, recipe "
         + ", ".join(f"{k}={getattr(args, k)}" for k in RECIPE_DEFAULTS)
     )
     folds = sorted(set(ds.folds.tolist())) if args.fold < 0 else [args.fold]

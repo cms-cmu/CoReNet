@@ -72,7 +72,7 @@ The decay chain of the HH → bb̄bb̄ example is
 
 ```yaml
 objects:
-  jets:  {features: [pt, eta, phi, mass, btag], max: 12}   # INPUTS/Source (alias of "jets") in the H5 file
+  jets:  {features: [pt, eta, phi, mass], max: 12}         # INPUTS/Source (alias of "jets") in the H5 file
   b:     jets btag 4                                        # the 4 highest-btag jets
   other: jets rest 8                                        # up to 8 remaining jets
 event: [nSelJets, HT]                                       # computed from the jet collection
@@ -88,12 +88,14 @@ outputs:
 combine: [HH]
 ```
 
-`jets` is the jet collection, with up to 12 jets per event; the listed `features` are the columns to
-read from the input file. `btag` is only used to pick which jets are treated as b-jet candidates
-(`b: jets btag 4`, the four jets most likely to be b jets); it is not an input to the network. The
-file holds all jets of the event, and the b jets are chosen when it is loaded, so one file serves any
-way of choosing them. [docs/EventInfo.md](docs/EventInfo.md) explains every
-line of such a file and [docs/Dataset.md](docs/Dataset.md) the input file.
+`jets` is the jet collection: `max: 12` is the number of jet slots read per event, and the input file must
+have at least that many. The listed `features` are the inputs of the network: these columns of the input
+file, and only these, are fed to it. \
+`jets btag 4` selects the four jets with the highest `btag` (alternatively `jets pt 4` would select the four
+leading jets): any column of the jets in the file can be used this way, and `jets mass 2 lowest` would take the
+two jets with the lowest value instead. The selector reads its column from the file for this selection only; it
+need not be a feature, and a feature named `btag` would be one more network input. The input
+file holds all jets of the event, and the b jets are chosen when it is loaded. For more details on specifying the event decay, check [docs/EventInfo.md](docs/EventInfo.md), and for the input file itself, check [docs/Dataset.md](docs/Dataset.md).
 
 The full-statistics files (454,261 HH → bb̄bb̄ events, 292,285 HH → bb̄WW events) are distributed
 separately ([DOI / URL to be added]); download them into `examples/data/` as `hh4b_all.h5` and
@@ -101,30 +103,54 @@ separately ([DOI / URL to be added]); download them into `examples/data/` as `hh
 
 ## Usage
 
-Three steps: describe the final state ([docs/EventInfo.md](docs/EventInfo.md)), prepare the input
-file ([docs/Dataset.md](docs/Dataset.md)), and choose the settings ([docs/Options.md](docs/Options.md)).
-Then check the two files against each other:
+1. Describe the final state in a configuration file ([docs/EventInfo.md](docs/EventInfo.md)).
+2. Prepare the input file ([docs/Dataset.md](docs/Dataset.md)).
+3. Choose the network and training settings ([docs/Options.md](docs/Options.md)).
+4. Before training, check that the configuration and the input file are correct and consistent with each other:
 
-```bash
-corenet-validate --config my_config.yaml --input my_data.h5
-```
+   ```bash
+   corenet-validate --config my_config.yaml --input my_data.h5
+   ```
 
-checks the event description against the input file; `--json report.json` also writes the report to a file.
+   The report ends with `valid` or `NOT VALID`; `--json report.json` also writes it to a file.
+
+The validator only reads the file, so it can run on a machine without a GPU: pixi checks the environment's
+CUDA requirement against the host driver, and `CONDA_OVERRIDE_CUDA=12.0 pixi run corenet-validate ...`
+lifts that check.
 
 ### Training
 
 ```bash
 corenet-train --config examples/bbww/bbww.yaml --input examples/data/bbww_all.h5 \
-    --fold 0 --exclude-folds 1 --output-dir runs/bbww --device cuda
+    --fold 0 --exclude-folds 1 --output-dir runs/bbww
 ```
 
-`--fold k` holds out the events of fold `k` for testing (`--fold -1`, the default, trains one model per
-fold in turn); the folds in `--exclude-folds` are kept out of training and used for validation. For each fold
-the output directory receives the checkpoint `model_fold{k}.pkl` (self-contained: the evaluation and
-the export need no configuration file), the training history `history_fold{k}.json` and the
-predictions on the held-out fold `predictions_fold{k}.h5`. Epochs, learning rate, batch size and the
-other settings are changed with flags (`--epochs`, `--lr`, ...) or in the configuration file; see
-[docs/Options.md](docs/Options.md) and `corenet-train --help`.
+* `--fold 0`: hold out fold 0 for testing. With `--fold -1` (the default), train one model per fold in turn.
+* `--exclude-folds 1`: keep fold 1 out of the training and use it for validation. `--exclude-folds next`
+  uses the fold `(k + 1) % n_folds` of the held-out fold `k`.
+* `--n-folds 5`: take the fold of an event as `squares(event) % 5`, a hash of the event number in
+  `EVENT/event`, instead of the `EVENT/fold` column ([docs/Dataset.md](docs/Dataset.md)); `--fold-seed`
+  (default 0) selects the hash key. The rule, the number of folds and the seed are stored in the
+  checkpoint and reused by `corenet-evaluate`. With 5 folds and seed 0 the rule equals the
+  `EVENT/fold` column of the example files.
+* `--early-stop-patience 5`: stop when the validation AUC has not improved for 5 epochs and keep the best epoch.
+* `--freeze-epoch 15 --finetune-layers head_main. head_reduce. aux_heads. --finetune-lr 1.0e-3 --finetune-batch-size 4096`:
+  the fine-tuning stage; from epoch 15 on only the parameters whose names start with the given prefixes
+  (default: the output layers; `none` freezes nothing) are trained, at this learning rate and batch size
+  (default: the schedule continues).
+* `--epochs`, `--lr`, `--seed`, ...: override the training settings of the configuration file.
+  See [docs/Options.md](docs/Options.md) or `corenet-train --help`.
+
+The folds come from the input file: the `EVENT/fold` column, or `squares(event) % K` with
+`--n-folds K` ([docs/Dataset.md](docs/Dataset.md)). The example files have 5 folds in `EVENT/fold`.
+
+Per fold `k`, the output directory receives:
+
+| file | content |
+|---|---|
+| `model_fold{k}.pkl` | checkpoint; evaluation and export need no configuration file |
+| `history_fold{k}.json` | training settings and per-epoch history |
+| `predictions_fold{k}.h5` | predictions on the held-out fold |
 
 ### Evaluation
 
@@ -133,12 +159,24 @@ corenet-evaluate --checkpoint runs/bbww/model_fold0.pkl --input examples/data/bb
     --output runs/bbww/eval_fold0.h5
 ```
 
-evaluates the fold that was held out in training (`--fold k` for another fold, `--fold -1` for every
-event of the file) and writes the metrics to `eval_fold0.h5.json` and the predictions to `eval_fold0.h5`:
-`class_probabilities` (one column per class, column 1 is the signal score), `views/<hypothesis>` (the
-pairing probabilities, for example the three pairings of the four b jets), `heads/<output>` (the extra
-score of every further output), the ROC curve `roc/{fpr,tpr,threshold}`, and the event labels,
-weights and folds. `--unweighted` ignores the event weights in the metrics.
+* `--fold k`: evaluate fold `k` instead of the fold held out in training. `--fold -1` evaluates every event of the file.
+* `--unweighted`: ignore the event weights in the metrics.
+* `--device cuda`: evaluate on the GPU (default: CPU).
+
+Output:
+
+| file | content |
+|---|---|
+| `eval_fold0.h5.json` | the metrics |
+| `eval_fold0.h5` | the predictions, as below |
+
+| dataset in `eval_fold0.h5` | content |
+|---|---|
+| `class_probabilities` | one column per class; column 1 is the signal score |
+| `views/HH`, `views/tt` | probability of every assignment of the jets to the particles of that hypothesis: for HH → bb̄bb̄ the three ways of pairing the four b jets into two Higgs bosons, for HH → bb̄WW the two ways of assigning the b jets to the top quarks of tt̄ |
+| `heads/ttbar` | the tt̄ score (one dataset per auxiliary output) |
+| `roc/{fpr,tpr,threshold}` | the ROC curve of the signal score |
+| `EVENT/{index,event,label,weight,fold}` | row index in the input file, event number, label, weight and fold of every evaluated event |
 
 ### Exporting
 
@@ -147,10 +185,17 @@ corenet-export --checkpoint runs/bbww/model_fold0.pkl --input examples/data/bbww
     --output-dir runs/bbww/export
 ```
 
-writes a TorchScript file (`model_fold0.pt`), an ONNX file (`model_fold0.onnx`, dynamic batch size)
-and a JSON description of the inputs and outputs, then reloads both and checks that they reproduce
-the PyTorch outputs on events of `--input` to within `--atol` (1e-4). `--formats torchscript` or
-`--formats onnx` exports only one of the two; `--opset` sets the ONNX opset (17).
+* `--formats torchscript` or `--formats onnx`: export only one of the two formats.
+* `--opset 17`: ONNX opset version.
+* `--n-events 1024`, `--atol 1e-4`: number of events of `--input` on which the exported models are checked against PyTorch, and the tolerance.
+
+Output, in `--output-dir`:
+
+| file | content |
+|---|---|
+| `model_fold0.pt` | TorchScript model |
+| `model_fold0.onnx` | ONNX model, dynamic batch size |
+| `model_fold0.json` | description of the inputs and outputs |
 
 Note that the exported model starts after the jets have been assigned: it takes the jets already
 assigned to the b quarks, the light quarks and so on. An application outside this package has to
@@ -160,13 +205,14 @@ assign the jets the same way (for `b: jets btag 4`, the four jets most likely to
 
 | input | shape | content |
 |---|---|---|
-| one per set of assigned jets, e.g. `b`, `other` | (N, features + 1, n) | the file's features of the `n` jets, in configuration order, plus a presence flag |
+| one per set of assigned jets, e.g. `b`, `other` | (N, features + 1, n) | the `features` of the `n` jets, in configuration order, plus a presence flag |
 | one per single object, e.g. `lepton`, `met` | (N, features + 1, 1) | the same for a single object |
 | `event` | (N, n_event) | the event quantities (`nSelJets`, `HT`, ...) |
 
-For HH → bb̄bb̄ the inputs are `b` (N, 6, 4), `other` (N, 6, 8) and `event` (N, 2); for HH → bb̄WW
-`b` (N, 6, 2), `q` (N, 6, 2), `lepton` (N, 7, 1), `met` (N, 3, 1) and `event` (N, 2). The
-exported model takes the same inputs as the training file, without any preprocessing step.
+`features` is the number of features listed for the collection in the configuration; a column read only
+by a selector (`btag`) is not an input. For HH → bb̄bb̄ the inputs are `b` (N, 5, 4), `other` (N, 5, 8)
+and `event` (N, 2); for HH → bb̄WW `b` (N, 5, 2), `q` (N, 5, 2), `lepton` (N, 7, 1), `met` (N, 3, 1) and
+`event` (N, 2). The exported model takes the same inputs as the training file, without any preprocessing step.
 
 #### Outputs
 

@@ -26,22 +26,29 @@ Changing one of these gives a different network: validate the file with `corenet
 
 | key | flag | default | meaning |
 |---|---|---|---|
-| `epochs` | `--epochs` | 20 | number of epochs; the model after the last epoch is kept |
+| `epochs` | `--epochs` | 20 | number of epochs; the model after the last epoch is kept unless `early_stop_patience` is set |
 | `lr` | `--lr` | 0.01 | learning rate |
 | `lr_milestones` | `--lr-milestones` | 15, 16, ..., 24 | epochs after which the learning rate is multiplied by `lr_gamma` |
 | `lr_gamma` | `--lr-gamma` | 0.25 | learning-rate decay factor |
 | `batch_size_init` | `--batch-size-init` | 1024 | batch size of the first epoch; it is doubled at epochs 1, 3, 6 and 10 |
-| `freeze_epoch` | `--freeze-epoch` | 15 | from this epoch on only the output layers are trained (a value ≥ `epochs` disables this) |
+| `freeze_epoch` | `--freeze-epoch` | 15 | start of the fine-tuning stage: from this epoch on only the layers named by `finetune_layers` are trained (a value ≥ `epochs` disables this) |
+| `finetune_layers` | `--finetune-layers PREFIX [PREFIX ...]` | `head_main.`, `head_reduce.`, `aux_heads.` (the output layers) | parameter-name prefixes that stay trainable from `freeze_epoch` on; `none` (the word, alone; `[]` in the file) freezes nothing |
+| `finetune_lr` | `--finetune-lr` | unset | learning rate set at `freeze_epoch`; the `lr_milestones` after it multiply this value by `lr_gamma`; unset keeps the schedule |
+| `finetune_batch_size` | `--finetune-batch-size` | unset | batch size from `freeze_epoch` on (the ghost batches of the stage are kept, capped so that none has fewer than 8 events); unset keeps the schedule |
 | `class_norm` | `--class-norm` / `--no-class-norm` | true | give every class the same total weight in training |
 | `seed` | `--seed` | 42 | random seed; fold `k` uses `seed + k` |
-| `rest_order` | `--rest-order` | `pt` | order of the jets taken by a `rest` line: `pt`, or `selector` to keep the order of the previous `btag`/`pt` line |
+| `early_stop_patience` | `--early-stop-patience` | 0 | stop when the validation AUC (on the `--exclude-folds` fold) has not improved for this many epochs, and keep the weights of the best epoch; 0 trains every epoch |
+| `rest_order` | `--rest-order` | `pt` | order of the jets taken by a `rest` line: `pt`, or `selector` to keep the order of the previous candidate line on the same collection (e.g. `b: jets btag 4`) |
 
 Write floating-point numbers with a decimal point (`0.005` or `5.0e-3`): YAML reads `5e-3` as a string,
 which the validation rejects.
 
 Other flags of `corenet-train`: `--config`, `--input`, `--output-dir`, `--fold` (held-out fold, `-1`
-for every fold in turn), `--exclude-folds` (validation folds), `--save-every-epoch` (also save
-`model_fold{k}_epoch{e}.pkl` after every epoch) and `--device`.
+for every fold in turn), `--exclude-folds` (validation folds; `next` = the fold `(k + 1) % n_folds` of
+the held-out fold `k`), `--n-folds K` (fold = `squares(event) % K` from `EVENT/event` instead of the
+`EVENT/fold` column, [Dataset.md](./Dataset.md)), `--fold-seed` (seed of that rule, default 0, the seed
+of the example files), `--save-every-epoch` (also save `model_fold{k}_epoch{e}.pkl` after every epoch)
+and `--device`.
 
 ## Fixed in code
 
@@ -49,9 +56,9 @@ These choices are part of the training procedure and the network and have no set
 
 * the optimizer is Adam, and the learning rate is multiplied by `lr_gamma` after each epoch listed in `lr_milestones`;
 * the batch size doubles at epochs 1, 3, 6 and 10, and the batches are split into 64, 16, 4, 1 and 0 ghost batches over those stages;
-* from `freeze_epoch` on, only the output layers keep training;
+* from `freeze_epoch` on, only the layers named by `finetune_layers` (by default the output layers) keep training;
 * the input file needs no standardization of its values;
-* the event-level quantities `nSelJets` and `HT` are computed from the jets in the file.
+* the event-level quantities `nSelJets` and `HT` are computed from the jets in the file; `nSelJets` enters as `log(nSelJets - (min_jets - 1))` ([EventInfo.md](./EventInfo.md)).
 
 ## Choosing the jets
 

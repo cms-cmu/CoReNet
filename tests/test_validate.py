@@ -39,6 +39,15 @@ def test_valid_synthetic(tmp_path, topology):
         in msgs
     )
     assert "loader + forward pass" in msgs
+    assert "selected by `btag` highest first (reads btag, pt for the selection)" in msgs
+    assert "selected by `rest` (reads pt for the selection)" in msgs
+    assert "['btag'] read for the selection only (not network inputs)" in msgs
+    assert "features ['pt', 'eta', 'phi', 'mass'] (the network inputs)" in msgs
+    assert (
+        "leaf `b`: tensor (400, 5, 4)"
+        if topology == "hh4b"
+        else "leaf `b`: tensor (400, 5, 2)"
+    ) in msgs
     assert (
         validate.main(
             [
@@ -88,6 +97,14 @@ BROKEN_CONFIGS = [
     ),
     (lambda c: c["objects"]["jets"].__setitem__("max", "12"), "max must be an integer"),
     (lambda c: c["objects"].__setitem__("b", "jet btag 2"), "unknown collection 'jet'"),
+    (
+        lambda c: c["objects"].__setitem__("b", "jets btag 2 top"),
+        "expected '<collection> <column> <n> [lowest]', got 'jets btag 2 top'",
+    ),
+    (
+        lambda c: c["objects"].__setitem__("q", "jets rest 2 lowest"),
+        "'rest' takes no 'lowest'",
+    ),
     (
         lambda c: c["hypotheses"]["tt"].__setitem__("t_had", ["bb", "W_had"]),
         "child 'bb' is neither",
@@ -163,6 +180,45 @@ def test_broken_config(tmp_path, edit, message):
     assert r.errors and message in _errors(r), _errors(r)
 
 
+def test_missing_selector_column(tmp_path):
+    """A column named in a candidate line must exist in the file (FAIL), whether or not it is a feature."""
+    data = write_synthetic(tmp_path / "d.h5", "bbww", n=400)
+    cfg = _bbww()
+    cfg["objects"]["b"] = "jets dnn_score 2 lowest"
+    r = validate.validate(_write(tmp_path, cfg), data)
+    msgs = "\n".join(m for _, _, m in r.items)
+    assert (
+        "selected by `dnn_score` lowest first (reads dnn_score, pt for the selection)"
+        in msgs
+    )
+    assert (
+        "expects dataset INPUTS/Jets/dnn_score (read for the selection by `b`, not a feature): not found"
+        in _errors(r)
+    )
+    cfg["objects"]["b"] = (
+        "jets mass 2 lowest"  # a feature column: no selection-only line
+    )
+    r = validate.validate(_write(tmp_path, cfg), data)
+    assert not r.errors, r.errors
+    assert "read for the selection only" not in "\n".join(m for _, _, m in r.items)
+
+
+def test_btag_feature_is_an_input(tmp_path):
+    """btag listed under features: accepted, reported as a network input, one more channel."""
+    cfg = _bbww()
+    cfg["objects"]["jets"]["features"] = ["pt", "eta", "phi", "mass", "btag"]
+    data = write_synthetic(tmp_path / "d.h5", "bbww", n=400)
+    r = validate.validate(_write(tmp_path, cfg), data)
+    assert not r.errors, r.errors
+    msgs = "\n".join(m for _, _, m in r.items)
+    assert "features ['pt', 'eta', 'phi', 'mass', 'btag'] (the network inputs)" in msgs
+    assert "read for the selection only" not in msgs
+    assert (
+        "leaf `b`: tensor (400, 6, 2)" in msgs
+        and "network built: 3,832 parameters" not in msgs
+    )
+
+
 def test_yaml_syntax_error(tmp_path):
     p = tmp_path / "bad.yaml"
     p.write_text("objects: {jets: [\n")
@@ -209,6 +265,14 @@ BROKEN_FILES = [
     (
         lambda f: _replace(f, "INPUTS/Jets/btag", np.array(["x"] * 400, dtype="S1")),
         "INPUTS/Jets/btag: dtype |S1 is not numeric",
+    ),
+    (
+        lambda f: f.__delitem__("INPUTS/Jets/btag"),
+        "expects dataset INPUTS/Jets/btag (read for the selection by `b`, not a feature): not found",
+    ),
+    (
+        lambda f: _replace(f, "INPUTS/Jets/btag", f["INPUTS/Jets/btag"][:, :10]),
+        "INPUTS/Jets/btag: 10 slots, the configuration asks for max 12",
     ),
     (
         lambda f: _replace(f, "INPUTS/Jets/MASK", f["INPUTS/Jets/MASK"][:, :11]),
@@ -267,3 +331,76 @@ def test_missing_event_scalar_and_warnings(tmp_path):
     )
     w = "\n".join(r.warnings)
     assert "EVENT/weight not found" in w and "INPUTS/Jets/MASK not found" in w
+
+
+def test_fold_report(tmp_path):
+    """The fold source and the events per fold; --n-folds reports the squares(event) % K split instead."""
+    from corenet.data.folds import fold_of
+
+    data = write_synthetic(tmp_path / "d.h5", "bbww", n=400)
+    r = validate.validate(BBWW, data)
+    msgs = "\n".join(m for _, _, m in r.items)
+    assert not r.errors and "folds from EVENT/fold: events per fold {0: " in msgs
+    assert "--n-folds" not in msgs
+    # the synthetic folds are random: the rule disagrees with the column for most events
+    r = validate.validate(BBWW, data, n_folds=5)
+    msgs = "\n".join(m for _, _, m in r.items)
+    assert not r.errors, r.errors
+    assert (
+        "folds from squares(event) % 5, seed 0 (--n-folds): events per fold {0: "
+        in msgs
+    )
+    assert "EVENT/fold disagrees with squares(event) % 5, seed 0 for " in "\n".join(
+        r.warnings
+    )
+    assert "loader + forward pass" in msgs
+    # a column equal to the rule (seed 3)
+    with h5py.File(data, "a") as f:
+        _replace(f, "EVENT/fold", fold_of(f["EVENT/event"][...], 5, 3))
+    r = validate.validate(BBWW, data, n_folds=5, fold_seed=3)
+    assert not r.errors and "EVENT/fold equals squares(event) % 5, seed 3" in "\n".join(
+        m for _, _, m in r.items
+    )
+    assert not r.warnings, r.warnings
+    assert "disagrees" in "\n".join(validate.validate(BBWW, data, n_folds=5).warnings)
+    # the shipped file: its column is the rule with 5 folds and seed 0
+    shipped = repo / "examples/data/hh4b_small.h5"
+    if shipped.exists():
+        r = validate.validate(HH4B, shipped, n_folds=5)
+        assert not r.errors and not r.warnings, (r.errors, r.warnings)
+        assert "EVENT/fold equals squares(event) % 5, seed 0" in "\n".join(
+            m for _, _, m in r.items
+        )
+    # no column: FAIL by default (see BROKEN_FILES), valid with --n-folds
+    with h5py.File(data, "a") as f:
+        del f["EVENT/fold"]
+    r = validate.validate(BBWW, data)
+    assert "EVENT/fold not found" in _errors(r) and "pass --n-folds K" in _errors(r)
+    assert (
+        validate.main(["--config", str(BBWW), "--input", str(data), "--n-folds", "3"])
+        == 0
+    )
+    r = validate.validate(BBWW, data, n_folds=3)
+    msgs = "\n".join(m for _, _, m in r.items)
+    with h5py.File(data, "r") as f:
+        counts = np.bincount(fold_of(f["EVENT/event"][...], 3), minlength=3).tolist()
+    expected = {i: c for i, c in enumerate(counts)}
+    assert not r.errors and (
+        f"folds from squares(event) % 3, seed 0 (--n-folds): events per fold {expected}"
+        in msgs
+    )
+    # negative event numbers cannot be folded
+    with h5py.File(data, "a") as f:
+        _replace(f, "EVENT/event", f["EVENT/event"][...] - 10)
+    r = validate.validate(BBWW, data, n_folds=3)
+    assert (
+        "folds = squares(event) % 3, seed 0 (--n-folds): 10 event numbers are negative"
+        in _errors(r)
+    )
+    with h5py.File(data, "a") as f:
+        del f["EVENT/event"]
+    r = validate.validate(BBWW, data, n_folds=3)
+    assert (
+        "folds = squares(event) % 3, seed 0 (--n-folds): EVENT/event not found"
+        in _errors(r)
+    )

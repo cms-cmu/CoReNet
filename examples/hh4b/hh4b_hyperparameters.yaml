@@ -2,7 +2,7 @@
 # Training with this file gives the same result as with hh4b.yaml. Copy it and edit the values.
 # Reference: docs/Options.md.
 objects:
-  jets:  {features: [pt, eta, phi, mass, btag], max: 12}
+  jets:  {features: [pt, eta, phi, mass], max: 12}
   b:     jets btag 4
   other: jets rest 8
 event: [nSelJets, HT]
