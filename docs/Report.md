@@ -83,8 +83,9 @@ what could not be produced and why.
    events and weights per fold and class, and the training set of every fold.
 8. **Other checks**: the mean event weight as a function of the leading and the last candidate jet pT and
    of the jet multiplicity, per class.
-9. **Not produced**: everything the run did not provide (no `TARGETS`, no predictions on the training
-   folds, no history, ...) and the reason.
+
+A figure whose inputs the run did not provide (no `TARGETS`, no predictions on the training folds, ...) is
+left out.
 
 Weighted distributions use the event weights of the file clipped at 0, as the training does; each class is
 normalised to unit area. Mean ± sd are over folds.

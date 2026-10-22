@@ -60,7 +60,6 @@ SECTIONS = [
     ("raw", "Raw inputs"),
     ("weights", "Weights"),
     ("other", "Other checks"),
-    ("gaps", "Not produced"),
 ]
 SPLITS = ("test", "validation", "train")
 SPLIT_STYLE = {"test": "-", "train": "--", "validation": "-."}
@@ -620,31 +619,24 @@ class Report:
                     esc(", ".join(sorted(fd.splits))) or "-",
                 ]
             )
-        parts.append(
-            table(
-                [
-                    "fold",
-                    "validation folds",
-                    "training events",
-                    "validation events",
-                    "test events",
-                    "epochs run",
-                    "best epoch",
-                    "stopped after",
-                    "parameters",
-                    "fine-tuned parameters",
-                    "wall time [s]",
-                    "predictions",
-                ],
-                rows,
-                "Folds",
-            )
-        )
-        if not wall_recorded:
-            parts.append(note("Wall time: not recorded in the history files."))
-            self.gaps.append(
-                "wall time: corenet-train does not record it in history_fold*.json"
-            )
+        header = [
+            "fold",
+            "validation folds",
+            "training events",
+            "validation events",
+            "test events",
+            "epochs run",
+            "best epoch",
+            "stopped after",
+            "parameters",
+            "fine-tuned parameters",
+            "wall time [s]",
+            "predictions",
+        ]
+        if not wall_recorded:  # the column exists only when the history files carry a wall time
+            header.pop(10)
+            rows = [r[:10] + r[11:] for r in rows]
+        parts.append(table(header, rows, "Folds"))
         if any(
             fd.history and fd.history.get("early_stop_patience") for fd in self.folds
         ):
@@ -1876,17 +1868,10 @@ class Report:
         )
         return "".join(parts)
 
-    def section_gaps(self) -> str:
-        if not self.gaps:
-            return "<p>Everything requested could be produced for this run.</p>"
-        items = "".join(f"<li>{esc(g)}</li>" for g in dict.fromkeys(self.gaps))
-        return f"<ul>{items}</ul>"
-
     # ---------------------------------------------------------------- page
     def render(self) -> str:
         bodies = {}
-        order = [s for s in SECTIONS if s[0] != "gaps"]
-        for key, title in order:
+        for key, title in SECTIONS:
             try:
                 bodies[key] = getattr(self, f"section_{key}")()
             except Exception as e:  # a section that fails is reported, not fatal
@@ -1898,7 +1883,6 @@ class Report:
                     f'<p class="warn">This section could not be produced: {esc(type(e).__name__)}: {esc(e)}</p>'
                 )
             plt.close("all")
-        bodies["gaps"] = self.section_gaps()
         toc = "".join(
             f'<li><a href="#{k}">{i + 1}. {esc(t)}</a></li>'
             for i, (k, t) in enumerate(SECTIONS)
@@ -2022,10 +2006,10 @@ def main(argv=None) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(page, encoding="utf-8")
     logging.info(
-        f"wrote {out} ({out.stat().st_size / 1e6:.2f} MB, {len(report.gaps)} items not produced)"
+        f"wrote {out} ({out.stat().st_size / 1e6:.2f} MB)"
     )
-    for g in dict.fromkeys(report.gaps):
-        logging.info(f"not produced: {g}")
+    for g in dict.fromkeys(report.gaps):  # inputs the run did not provide; verbose only
+        logging.debug(f"not produced: {g}")
     return out
 
 

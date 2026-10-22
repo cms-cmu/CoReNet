@@ -173,6 +173,7 @@ Output:
 |---|---|
 | `eval_fold0.h5.json` | the metrics |
 | `eval_fold0.h5` | the predictions, as below |
+| `report.html` | every result of the run on one page, written by `corenet-report` ([Report](#report) below) |
 
 | dataset in `eval_fold0.h5` | content |
 |---|---|
@@ -243,7 +244,9 @@ Output:
 
 | file | content |
 |---|---|
-| `report.html` | self-contained page: run summary, training curves, ROC / AUC / score distributions, view probabilities and pairing accuracy against `TARGETS`, the inputs as the network embeds them, the raw inputs, the event weights, and the list of what could not be produced ([docs/Report.md](docs/Report.md)) |
+| `report.html` | self-contained page: run summary, training curves, ROC / AUC / score distributions, view probabilities and pairing accuracy against `TARGETS`, the inputs as the network embeds them, the raw inputs and the event weights ([docs/Report.md](docs/Report.md)) |
+
+Open `report.html` in any browser; from a cluster, copy it to your machine first (`scp <host>:runs/bbww/report.html .`).
 
 ```python
 import onnxruntime as ort
