@@ -296,7 +296,9 @@ BROKEN_FILES = [
     ),
     (
         lambda f: _replace(
-            f, "EVENT/fold", np.where(f["EVENT/fold"][...] == 2, 7, f["EVENT/fold"][...])
+            f,
+            "EVENT/fold",
+            np.where(f["EVENT/fold"][...] == 2, 7, f["EVENT/fold"][...]),
         ),
         "EVENT/fold: fold ids [0, 1, 3, 4, 7] are not 0..K-1 (the ids of K folds must be exactly 0..K-1; "
         "--exclude-folds next = fold (k + 1) % K): renumber the column or pass --n-folds K",

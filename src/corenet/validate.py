@@ -421,7 +421,9 @@ def check_data(
                     if n_folds is None:
                         report.fail(sec, msg + " or pass --n-folds K")
                     else:
-                        report.warn(sec, msg + f"; --n-folds {n_folds} ignores the column")
+                        report.warn(
+                            sec, msg + f"; --n-folds {n_folds} ignores the column"
+                        )
                     column = None
         elif n_folds is None:
             report.fail(

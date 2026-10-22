@@ -629,7 +629,9 @@ class Report:
             "wall time [s]",
             "predictions",
         ]
-        if not wall_recorded:  # the column exists only when the history files carry a wall time
+        if (
+            not wall_recorded
+        ):  # the column exists only when the history files carry a wall time
             header.pop(10)
             rows = [r[:10] + r[11:] for r in rows]
         parts.append(table(header, rows, "Folds"))
@@ -1966,9 +1968,7 @@ def main(argv=None) -> Path:
     out = Path(args.output) if args.output else report.run_dir / "report.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(page, encoding="utf-8")
-    logging.info(
-        f"wrote {out} ({out.stat().st_size / 1e6:.2f} MB)"
-    )
+    logging.info(f"wrote {out} ({out.stat().st_size / 1e6:.2f} MB)")
     for g in dict.fromkeys(report.gaps):  # inputs the run did not provide; verbose only
         logging.debug(f"not produced: {g}")
     return out

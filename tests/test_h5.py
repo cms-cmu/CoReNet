@@ -445,7 +445,8 @@ def test_missing_fold_column(tmp_path):
     assert len(ds0) == 500 and (ds0.folds.numpy() == NO_FOLD).all()
     assert ds0[3]["fold"] == NO_FOLD and ds0.inputs["b"].shape == (500, 5, 4)
     with pytest.raises(
-        KeyError, match="no EVENT/fold dataset; holding out fold 0 needs .* pass --n-folds K"
+        KeyError,
+        match="no EVENT/fold dataset; holding out fold 0 needs .* pass --n-folds K",
     ):
         ds0.fold_indices(0)
     with pytest.raises(KeyError, match="no EVENT/fold dataset; training needs"):
@@ -479,7 +480,9 @@ def test_fold_ids_must_be_0_to_k(tmp_path):
     for bad in ([0, 1, 3], [1, 2, 3], [0, 2, 4]):
         with h5py.File(path, "a") as f:
             del f["EVENT/fold"]
-            f.create_dataset("EVENT/fold", data=np.array(bad, dtype=np.int64)[event % 3])
+            f.create_dataset(
+                "EVENT/fold", data=np.array(bad, dtype=np.int64)[event % 3]
+            )
         with pytest.raises(
             ValueError,
             match=re.escape(
@@ -509,7 +512,9 @@ def test_selector_sorts_at_file_precision(tmp_path):
         low[:, 0], low[:, 1] = 16777216, 16777217
         f.create_dataset("INPUTS/Source/low", data=low)
         urank = np.zeros((n, slots), dtype=np.uint8)
-        urank[:, 1] = 7  # jet 0 has 0: -0 wraps to 0 and would be preferred by a wrapped negation
+        urank[:, 1] = (
+            7  # jet 0 has 0: -0 wraps to 0 and would be preferred by a wrapped negation
+        )
         f.create_dataset("INPUTS/Source/urank", data=urank)
         flag = np.zeros((n, slots), dtype=bool)
         flag[:, 1] = True
@@ -527,7 +532,9 @@ def test_selector_sorts_at_file_precision(tmp_path):
     cfg = _hh4b_cfg(["pt", "eta", "phi", "mass"])
     cfg["objects"]["b"] = "jets low 4 lowest"
     x = H5Dataset(path, parse_config(cfg)).inputs
-    assert np.array_equal(x["b"][:, 0, 0].numpy(), pt[:, 0])  # the lowest: 16777216 is jet 0
+    assert np.array_equal(
+        x["b"][:, 0, 0].numpy(), pt[:, 0]
+    )  # the lowest: 16777216 is jet 0
     assert np.array_equal(x["b"][:, 0, 1].numpy(), pt[:, 1])
     # the b-jet selection of the example files is unchanged (float32 in the file): test_hh4b_small / test_bbww_small
 
@@ -561,12 +568,18 @@ def test_context_role_extras_reach_the_network():
     flipped = {k: v.clone() for k, v in batch.items()}
     present = flipped["other"][:, -1] > 0
     assert present.any()
-    flipped["other"][:, 4][present] = 1.0 - flipped["other"][:, 4][present]  # btag of the other jets
-    assert torch.equal(flipped["b"], batch["b"]) and torch.equal(flipped["event"], batch["event"])
+    flipped["other"][:, 4][present] = (
+        1.0 - flipped["other"][:, 4][present]
+    )  # btag of the other jets
+    assert torch.equal(flipped["b"], batch["b"]) and torch.equal(
+        flipped["event"], batch["event"]
+    )
     with torch.no_grad():
         out = m5(flipped)
         again = m5(batch)
     assert torch.isfinite(out["logits"]).all()
-    assert not torch.equal(out["logits"], ref["logits"]), "the btag of the other jets is not used"
+    assert not torch.equal(out["logits"], ref["logits"]), (
+        "the btag of the other jets is not used"
+    )
     assert not torch.equal(out["views"]["HH"], ref["views"]["HH"])
     assert torch.equal(again["logits"], ref["logits"])

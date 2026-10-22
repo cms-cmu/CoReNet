@@ -68,7 +68,9 @@ def _report(out_dir: Path, data: Path, *extra: str) -> str:
     assert out.stat().st_size < MAX_BYTES, out.stat().st_size
     page = out.read_text(encoding="utf-8")
     assert len(HEADINGS) == 8, HEADINGS
-    assert re.findall(r"<h2>(.*?)</h2>", page) == HEADINGS, "the page must hold exactly the eight sections in order"
+    assert re.findall(r"<h2>(.*?)</h2>", page) == HEADINGS, (
+        "the page must hold exactly the eight sections in order"
+    )
     low = page.lower()
     assert "not produced" not in low, "the 'Not produced' list is back"
     assert "wall time" not in low, "the wall-time column / note is back"
@@ -87,7 +89,9 @@ def test_report_with_targets_and_all_events() -> None:
         _evaluate_all(out_dir, data)
         page = _report(out_dir, data)
         assert "Pairing accuracy of the argmax view of HH" in page
-        assert re.search(r"<td>mean ± sd</td><td>[0-9.]+</td><td>[0-9.]+</td><td>[0-9.]+</td>", page)
+        assert re.search(
+            r"<td>mean ± sd</td><td>[0-9.]+</td><td>[0-9.]+</td><td>[0-9.]+</td>", page
+        )
         assert "<td>test, train, validation</td></tr>" in page
         assert "overtraining check" in page
         assert "AUC of the main score" in page
@@ -107,7 +111,9 @@ def test_report_without_targets_and_train_predictions() -> None:
         assert "Weighted share of the argmax view, test folds: HH" in page
         assert "Pairing accuracy" not in page and "against TARGETS" not in page
         # classification: AUC on the test fold only, no train / validation curves, no overtraining overlay
-        assert re.search(r"<td>mean ± sd</td><td>[0-9.]+</td><td>-</td><td>-</td>", page)
+        assert re.search(
+            r"<td>mean ± sd</td><td>[0-9.]+</td><td>-</td><td>-</td>", page
+        )
         assert "overtraining check" not in page
         assert "<td>test</td></tr>" in page and "test, train, validation" not in page
         low_page = page.lower()

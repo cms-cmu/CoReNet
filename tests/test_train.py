@@ -191,13 +191,17 @@ def test_batch_schedule_divides_any_batch_size() -> None:
     for bs_init in (64, 100, 300, 1000, 1500):
         for e in range(12):
             bs, n_gb = train.batch_schedule(e, bs_init)
-            assert n_gb == 0 or (bs % n_gb == 0 and bs // n_gb >= train.MIN_GHOST_BATCH_SIZE), (bs_init, e, bs, n_gb)
-    for k in range(6, 13):                      # powers of two: unchanged from the original schedule
+            assert n_gb == 0 or (
+                bs % n_gb == 0 and bs // n_gb >= train.MIN_GHOST_BATCH_SIZE
+            ), (bs_init, e, bs, n_gb)
+    for k in range(6, 13):  # powers of two: unchanged from the original schedule
         bs_init = 1 << k
         for e in range(12):
             bs, n_gb = train.batch_schedule(e, bs_init)
             stage = 0 if e == 0 else 1 if e < 3 else 2 if e < 6 else 3 if e < 10 else 4
-            assert n_gb == min((64, 16, 4, 1, 0)[stage], max(1, bs // train.MIN_GHOST_BATCH_SIZE))
+            assert n_gb == min(
+                (64, 16, 4, 1, 0)[stage], max(1, bs // train.MIN_GHOST_BATCH_SIZE)
+            )
 
 
 def test_batch_schedule() -> None:
@@ -533,7 +537,15 @@ def test_early_stopping_needs_validation() -> None:
             SystemExit,
             match=r"--early-stop-patience 1 needs validation events, but --exclude-folds \[0\] leaves none",
         ):
-            _train(data, tmp / "empty", "--exclude-folds", "0", "--early-stop-patience", "1", epochs=1)
+            _train(
+                data,
+                tmp / "empty",
+                "--exclude-folds",
+                "0",
+                "--early-stop-patience",
+                "1",
+                epochs=1,
+            )
         h = _train(data, tmp / "empty_ok", "--exclude-folds", "0", epochs=1)
         assert h["n_val"] == 0 and "val_loss" not in h["history"][0]
         one = tmp / "oneclass.h5"
@@ -569,15 +581,24 @@ def test_file_without_folds() -> None:
         with h5py.File(nofold, "a") as f:
             del f["EVENT/fold"]
         with pytest.raises(
-            SystemExit, match="no EVENT/fold dataset; training needs the fold of every event: pass --n-folds K"
+            SystemExit,
+            match="no EVENT/fold dataset; training needs the fold of every event: pass --n-folds K",
         ):
             _train(nofold, tmp / "nofold_train", epochs=1)
         assert not (tmp / "nofold_train").exists()
         with pytest.raises(
-            SystemExit, match="no EVENT/fold dataset, so fold 0 cannot be selected: pass --fold -1"
+            SystemExit,
+            match="no EVENT/fold dataset, so fold 0 cannot be selected: pass --fold -1",
         ):
             evaluate.main(
-                ["--checkpoint", str(ckpt), "--input", str(nofold), "--output", str(tmp / "e0.h5")]
+                [
+                    "--checkpoint",
+                    str(ckpt),
+                    "--input",
+                    str(nofold),
+                    "--output",
+                    str(tmp / "e0.h5"),
+                ]
             )
         metrics = evaluate.main(
             [
@@ -595,7 +616,9 @@ def test_file_without_folds() -> None:
         with h5py.File(tmp / "eall.h5", "r") as f:
             assert f.attrs["fold"] == -1 and f.attrs["n_folds"] == 0
             assert f.attrs["fold_rule"] == FOLD_RULE_NONE
-            assert (f["EVENT/fold"][...] == NO_FOLD).all() and len(f["EVENT/event"]) == 2000
+            assert (f["EVENT/fold"][...] == NO_FOLD).all() and len(
+                f["EVENT/event"]
+            ) == 2000
         meta = export.main(
             [
                 "--checkpoint",
@@ -759,7 +782,8 @@ def test_n_folds_rule() -> None:
         )
         assert meta["exclude_folds"] == [0]
         with pytest.raises(
-            SystemExit, match="no EVENT/fold dataset, so fold 4 cannot be selected: pass --fold -1"
+            SystemExit,
+            match="no EVENT/fold dataset, so fold 4 cannot be selected: pass --fold -1",
         ):
             evaluate.main(
                 [

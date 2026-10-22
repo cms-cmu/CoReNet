@@ -68,17 +68,23 @@ def test_detector_sees_a_runtime_union(tmp_path):
         "SeedLike = int | str | Iterable[int | str]\nx: int | None = None\n"
         "def f(a: int | None) -> str | None:\n    y: int | None = None\n    return None\n"
     )
-    assert runtime_unions(bad) == ["bad.py:3"]  # the annotations on lines 4-6 are not evaluated
+    assert runtime_unions(bad) == [
+        "bad.py:3"
+    ]  # the annotations on lines 4-6 are not evaluated
 
 
-@pytest.mark.parametrize("path", SOURCES, ids=[str(p.relative_to(SRC)) for p in SOURCES])
+@pytest.mark.parametrize(
+    "path", SOURCES, ids=[str(p.relative_to(SRC)) for p in SOURCES]
+)
 def test_no_runtime_type_union(path):
     assert runtime_unions(path) == [], (
         "type union evaluated at import time (fails on Python 3.9); use typing.Union"
     )
 
 
-@pytest.mark.parametrize("path", SOURCES, ids=[str(p.relative_to(SRC)) for p in SOURCES])
+@pytest.mark.parametrize(
+    "path", SOURCES, ids=[str(p.relative_to(SRC)) for p in SOURCES]
+)
 def test_parses_with_python39_grammar(path):
     ast.parse(path.read_text(), filename=str(path), feature_version=(3, 9))
 
@@ -88,4 +94,7 @@ def test_seed_alias_is_a_typing_union():
 
     assert typing.get_origin(SeedLike) is typing.Union
     assert set(typing.get_args(SeedLike)[:2]) == {int, str}
-    assert Squares("delphes_h5", "fold", 0)._seed == Squares(("delphes_h5", "fold", 0))._seed
+    assert (
+        Squares("delphes_h5", "fold", 0)._seed
+        == Squares(("delphes_h5", "fold", 0))._seed
+    )
