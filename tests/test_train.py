@@ -445,6 +445,33 @@ def test_finetune_lr_and_batch_size() -> None:
     assert train.finetune_batch(0, 1024, 4) == (4, 1)
 
 
+def test_finetune_batch_size_divisor() -> None:
+    """The ghost batches of the fine-tuning stage divide the batch size (the GBN layers split a batch into
+    equal ghost batches): 300 events get 15 (epochs 1-2, cap 16) or 30 (epoch 0, cap 64) ghost batches of
+    >= 8 events, powers of two keep the schedule, and training with --finetune-batch-size 300 runs."""
+    assert train.ghost_batches(300, 16) == 15 and train.ghost_batches(300, 64) == 30
+    assert train.ghost_batches(300, 4) == 4 and train.ghost_batches(300, 1) == 1
+    assert train.ghost_batches(300, 0) == 0 and train.ghost_batches(7, 64) == 1
+    assert train.ghost_batches(301, 16) == 7  # 301 = 7 * 43
+    assert train.finetune_batch(1, 1024, 300) == (300, 15)
+    assert train.finetune_batch(0, 1024, 300) == (300, 30)
+    assert train.finetune_batch(3, 1024, 300) == (300, 4)
+    assert train.finetune_batch(10, 1024, 300) == (300, 0)
+    for epoch, cap in ((0, 64), (1, 16), (3, 4), (6, 1), (10, 0)):
+        for bs in (64, 128, 256, 512, 1024, 2048, 4096):
+            old = min(cap, max(1, bs // train.MIN_GHOST_BATCH_SIZE)) if cap else 0
+            assert train.finetune_batch(epoch, 1024, bs) == (bs, old), (epoch, bs)
+            assert bs % max(old, 1) == 0
+    with tempfile.TemporaryDirectory(prefix="corenet_ft_") as tmp:
+        tmp = Path(tmp)
+        data = write_synthetic(tmp / "hh4b_all.h5", "hh4b")
+        h = _train(data, tmp / "m", "--finetune-batch-size", "300")
+        e0, e1 = h["history"]
+        assert e0["batch_size"] == 128 and e0["ghost_batches"] == 16
+        assert e1["batch_size"] == 300 and e1["ghost_batches"] == 15
+        assert np.isfinite(e1["train_loss"]) and 0.0 <= e1["val_auc"] <= 1.0
+
+
 def test_file_without_folds() -> None:
     """A file with neither EVENT/fold nor --n-folds: training stops with a clear message, corenet-evaluate
     needs --fold -1 (every event; the output carries fold -1) and corenet-export works."""

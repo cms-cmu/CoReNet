@@ -34,7 +34,7 @@ Changing one of these gives a different network: validate the file with `corenet
 | `freeze_epoch` | `--freeze-epoch` | 15 | start of the fine-tuning stage: from this epoch on only the layers named by `finetune_layers` are trained (a value ≥ `epochs` disables this) |
 | `finetune_layers` | `--finetune-layers PREFIX [PREFIX ...]` | `head_main.`, `head_reduce.`, `aux_heads.` (the output layers) | parameter-name prefixes that stay trainable from `freeze_epoch` on; `none` (the word, alone; `[]` in the file) freezes nothing |
 | `finetune_lr` | `--finetune-lr` | unset | learning rate set at `freeze_epoch`; the `lr_milestones` after it multiply this value by `lr_gamma`; unset keeps the schedule |
-| `finetune_batch_size` | `--finetune-batch-size` | unset | batch size from `freeze_epoch` on (the ghost batches of the stage are kept, capped so that none has fewer than 8 events); unset keeps the schedule |
+| `finetune_batch_size` | `--finetune-batch-size` | unset | batch size from `freeze_epoch` on; the ghost batches of the stage are kept when they divide it, else the largest smaller number that does, so that every ghost batch has at least 8 events; unset keeps the schedule |
 | `class_norm` | `--class-norm` / `--no-class-norm` | true | give every class the same total weight in training |
 | `seed` | `--seed` | 42 | random seed; fold `k` uses `seed + k` |
 | `early_stop_patience` | `--early-stop-patience` | 0 | stop when the validation AUC (on the `--exclude-folds` fold) has not improved for this many epochs, and keep the weights of the best epoch; 0 trains every epoch |

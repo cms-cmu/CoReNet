@@ -8,7 +8,8 @@ or in the optional ``trainer:`` section of the configuration, see docs/Options.m
   * Adam, learning rate ``lr`` (1e-2), MultiStepLR with ``lr_milestones`` (epochs 15..24) and
     ``lr_gamma`` (0.25): the learning rate is multiplied by 0.25 after each of those epochs;
   * ``epochs`` (20) epochs; batch size ``batch_size_init`` (1024) at epoch 0, doubled at epochs
-    1, 3, 6 and 10, with (64, 16, 4, 1, 0) ghost batches;
+    1, 3, 6 and 10, with (64, 16, 4, 1, 0) ghost batches (a batch is split into equal ghost batches,
+    so their number must divide the batch size);
   * the input normalisation of every embedder is frozen from the training set before epoch 0;
   * at epoch ``freeze_epoch`` (15) the fine-tuning stage starts: every parameter whose name does not
     start with one of the ``finetune_layers`` prefixes (the output heads) is frozen; ``finetune_lr``
@@ -97,14 +98,27 @@ def batch_schedule(epoch: int, bs_init: int) -> tuple[int, int]:
     return bs, min(n_gb, max(1, bs // MIN_GHOST_BATCH_SIZE))  # no-op for bs_init >= 512
 
 
+def ghost_batches(bs: int, cap: int) -> int:
+    """The largest number of ghost batches <= ``cap`` that divides the batch size ``bs`` into ghost batches of
+    at least MIN_GHOST_BATCH_SIZE events (the GBN layers split a batch into equal parts); 1 when no such
+    divisor exists, 0 when ``cap`` is 0 (running statistics)."""
+    if cap <= 0:
+        return 0
+    for n in range(min(cap, bs // MIN_GHOST_BATCH_SIZE), 1, -1):
+        if bs % n == 0:
+            return n
+    return 1
+
+
 def finetune_batch(epoch: int, bs_init: int, finetune_batch_size: int | None):
-    """(batch size, ghost batches) of the fine-tuning stage: ``finetune_batch_size`` when set (ghost batches
-    capped so that none has fewer than MIN_GHOST_BATCH_SIZE events, 0 stays 0), else the schedule."""
+    """(batch size, ghost batches) of the fine-tuning stage: ``finetune_batch_size`` when set, with the
+    schedule's ghost batches reduced to the largest divisor of the batch size that keeps every ghost batch
+    at >= MIN_GHOST_BATCH_SIZE events (``ghost_batches``; 0 stays 0), else the schedule."""
     bs, n_gb = batch_schedule(epoch, bs_init)
     if finetune_batch_size is None:
         return bs, n_gb
     bs = finetune_batch_size
-    return bs, min(n_gb, max(1, bs // MIN_GHOST_BATCH_SIZE))
+    return bs, ghost_batches(bs, n_gb)
 
 
 def freeze_heads(model: CoReNet, prefixes=HEAD_PREFIXES) -> int:
