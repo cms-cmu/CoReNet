@@ -1,0 +1,40 @@
+# ttH (H -> bb) with one leptonic top against semileptonic ttbar, on the objects of the bbWW example.
+# Input file: tth_all.h5 (Zenodo), layout as the bbWW file without TARGETS groups (CoReNet needs none).
+# The selection asks for at least six jets and two b tags; min_jets sets the multiplicity offset accordingly.
+objects:
+  jets:   {features: [pt, eta, phi, mass], max: 12}        # INPUTS/Jets; features = network inputs
+  b:      jets btag 4                                       # the 4 highest-btag jets: two from the tops, two from the Higgs boson
+  q:      jets rest 2                                       # the 2 leading remaining jets: the hadronic W
+  lepton: {features: [pt, eta, phi, mass, isE, isM]}        # INPUTS/Lepton, a single object (max 1)
+  met:    {features: [pt, phi]}                             # INPUTS/Met, a single object (max 1)
+event: [nSelJets, HT]
+min_jets: 6
+
+hypotheses:
+  ttH:
+    H:     [b, b]            # the Higgs boson: one of the 6 pairs of b jets
+    t_had: [b, W_had]        # the hadronic top: a b jet and the hadronic W
+    t_lep: [b, W_lep]        # the leptonic top: a b jet and the leptonic W; 12 assignments of the 4 b jets in all
+  WW:                        # declares the two W candidates that both tops use (a shared node needs a parent;
+    W_had: [q, q]            #   in bbww.yaml that parent is H_WW); WW has a single candidate
+    W_lep: [lepton, met]     # the leptonic W, from the lepton and the missing momentum
+
+attention:
+  - W_lep: W_had
+  - t_had: t_lep             # the two tops never use the same b jet
+
+relations:                   # pairs the classifier looks at directly
+  - [lepton, met]
+  - [lepton, W_had]
+
+outputs:
+  signal: ttH                # label 1: ttH; label 0: semileptonic ttbar
+combine: [ttH, WW]           # WW is listed so that its W candidates reach the output
+
+training:
+  features: 8
+  attention_heads: 2
+  attention_gate: true
+  kv_projection: true
+  phase_symmetric: true
+  reflect_eta: false

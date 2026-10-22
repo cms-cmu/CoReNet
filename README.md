@@ -45,8 +45,9 @@ requires by construction but have not all been tested.
 
 ## Example
 
-The repository ships two small example files of 20,000 events each, so that everything below runs in
-under a minute. The HH → bb̄bb̄ example, from the repository root:
+The repository ships three small example files of 20,000 events each (`hh4b_small.h5`, `bbww_small.h5`,
+`tth_small.h5` in `examples/data/`), so that everything below runs in under a minute. The HH → bb̄bb̄
+example, from the repository root:
 
 ```bash
 # 1. check the configuration and the data file against each other
@@ -68,9 +69,10 @@ corenet-export --checkpoint runs/hh4b/model_fold0.pkl --input examples/data/hh4b
 corenet-report --run-dir runs/hh4b --input examples/data/hh4b_small.h5 --output runs/hh4b/report.html
 ```
 
-The same five commands with `bbww` in place of `hh4b` run the HH → bb̄WW example.
+The same five commands with `bbww` or `tth` in place of `hh4b` run the HH → bb̄WW and ttH examples.
 [docs/HH4b.md](docs/HH4b.md) walks through the HH → bb̄bb̄ example step by step;
-[docs/BBWW.md](docs/BBWW.md) does the same for HH → bb̄WW against tt̄.
+[docs/BBWW.md](docs/BBWW.md) does the same for HH → bb̄WW against tt̄, and
+[docs/TTH.md](docs/TTH.md) for ttH (H → bb̄) against semileptonic tt̄.
 
 The decay chain of the HH → bb̄bb̄ example is
 
@@ -101,9 +103,9 @@ two jets with the lowest value instead. The selector reads its column from the f
 need not be a feature, and a feature named `btag` would be one more network input. The input
 file holds all jets of the event, and the b jets are chosen when it is loaded. For more details on specifying the event decay, check [docs/EventInfo.md](docs/EventInfo.md), and for the input file itself, check [docs/Dataset.md](docs/Dataset.md).
 
-The full-statistics files (454,261 HH → bb̄bb̄ events, 292,285 HH → bb̄WW events) are distributed
-separately on Zenodo ([doi:10.5281/zenodo.23567532](https://doi.org/10.5281/zenodo.23567532)); download them into `examples/data/` as `hh4b_all.h5` and
-`bbww_all.h5`.
+The full-statistics files (454,261 HH → bb̄bb̄ events, 292,285 HH → bb̄WW events, 423,753 ttH and tt̄
+events) are distributed separately on Zenodo ([doi:10.5281/zenodo.23567532](https://doi.org/10.5281/zenodo.23567532)); download them into `examples/data/` as `hh4b_all.h5`,
+`bbww_all.h5` and `tth_all.h5`.
 
 ## Usage
 

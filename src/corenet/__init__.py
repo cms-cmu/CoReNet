@@ -4,7 +4,7 @@ from .checkpoint import load_checkpoint, save_checkpoint
 from .models.config import ConfigError, NetworkSpec, load_config, parse_config
 from .models.network import CoReNet
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 __all__ = [
     "CoReNet",

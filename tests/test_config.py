@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 
 import pytest
 
-from corenet.models.config import ConfigError, parse_config
+from corenet.models.config import ConfigError, load_config, parse_config
+from corenet.models.network import CoReNet
+
+TTH = Path(__file__).resolve().parent.parent / "examples/tth/tth.yaml"
 
 HH4B = {
     "objects": {
@@ -260,3 +264,14 @@ def test_min_jets():
         c["min_jets"] = bad
         with pytest.raises(ConfigError):
             parse_config(c)
+
+
+def test_tth_example_parses():
+    """examples/tth/tth.yaml: min_jets 6, hypotheses ttH and WW, 12 ttH views, 3,543 parameters."""
+    s = load_config(TTH)
+    assert s.min_jets == 6
+    assert set(s.hypotheses) == {"ttH", "WW"} and s.combine == ["ttH", "WW"]
+    model = CoReNet(s, device="cpu")
+    assert model.tables["ttH"].nodes["ttH"].n == 12
+    n_par = sum(p.numel() for p in model.parameters())
+    assert n_par == 3543, n_par

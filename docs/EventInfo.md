@@ -79,7 +79,8 @@ min_jets: 4
 
 Optional, default 4: the minimum number of jets per event in your selection. The jet multiplicity enters
 the network as `log(nSelJets - (min_jets - 1))`, so that the minimum multiplicity maps to zero; an event
-with fewer jets than `min_jets` would give a non-finite input.
+with fewer jets than `min_jets` would give a non-finite input. The ttH example (`examples/tth/tth.yaml`)
+selects at least six jets and sets `min_jets: 6`.
 
 ## `hypotheses`
 
