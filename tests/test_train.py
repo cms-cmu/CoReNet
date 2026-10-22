@@ -445,6 +445,65 @@ def test_finetune_lr_and_batch_size() -> None:
     assert train.finetune_batch(0, 1024, 4) == (4, 1)
 
 
+def test_file_without_folds() -> None:
+    """A file with neither EVENT/fold nor --n-folds: training stops with a clear message, corenet-evaluate
+    needs --fold -1 (every event; the output carries fold -1) and corenet-export works."""
+    from corenet import export
+    from corenet.data.h5 import FOLD_RULE_NONE, NO_FOLD
+
+    with tempfile.TemporaryDirectory(prefix="corenet_nofold_") as tmp:
+        tmp = Path(tmp)
+        data = write_synthetic(tmp / "hh4b_all.h5", "hh4b")
+        _train(data, tmp / "m", epochs=1)
+        ckpt = tmp / "m" / "model_fold0.pkl"
+        nofold = tmp / "nofold.h5"
+        shutil.copy(data, nofold)
+        with h5py.File(nofold, "a") as f:
+            del f["EVENT/fold"]
+        with pytest.raises(
+            SystemExit, match="no EVENT/fold dataset; training needs the fold of every event: pass --n-folds K"
+        ):
+            _train(nofold, tmp / "nofold_train", epochs=1)
+        assert not (tmp / "nofold_train").exists()
+        with pytest.raises(
+            SystemExit, match="no EVENT/fold dataset, so fold 0 cannot be selected: pass --fold -1"
+        ):
+            evaluate.main(
+                ["--checkpoint", str(ckpt), "--input", str(nofold), "--output", str(tmp / "e0.h5")]
+            )
+        metrics = evaluate.main(
+            [
+                "--checkpoint",
+                str(ckpt),
+                "--input",
+                str(nofold),
+                "--output",
+                str(tmp / "eall.h5"),
+                "--fold",
+                "-1",
+            ]
+        )
+        assert metrics["n_events"] == 2000 and 0.0 <= metrics["auc"]["main"] <= 1.0
+        with h5py.File(tmp / "eall.h5", "r") as f:
+            assert f.attrs["fold"] == -1 and f.attrs["n_folds"] == 0
+            assert f.attrs["fold_rule"] == FOLD_RULE_NONE
+            assert (f["EVENT/fold"][...] == NO_FOLD).all() and len(f["EVENT/event"]) == 2000
+        meta = export.main(
+            [
+                "--checkpoint",
+                str(ckpt),
+                "--input",
+                str(nofold),
+                "--output-dir",
+                str(tmp / "export"),
+                "--n-events",
+                "256",
+            ]
+        )
+        assert set(meta["files"]) == {"torchscript", "onnx"}
+        assert (tmp / "export" / "model_fold0.pt").exists()
+
+
 def test_finetune_recipe_from_config() -> None:
     """The three fine-tuning keys in the trainer: section, and their validation."""
     cfg = yaml.safe_load(HH4B.read_text())
@@ -591,7 +650,9 @@ def test_n_folds_rule() -> None:
             and meta["fold_rule"] == FOLD_RULE_COLUMN == "EVENT/fold"
         )
         assert meta["exclude_folds"] == [0]
-        with pytest.raises(KeyError, match="no EVENT/fold dataset"):
+        with pytest.raises(
+            SystemExit, match="no EVENT/fold dataset, so fold 4 cannot be selected: pass --fold -1"
+        ):
             evaluate.main(
                 [
                     "--checkpoint",

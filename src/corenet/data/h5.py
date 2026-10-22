@@ -14,7 +14,9 @@ plus ``labels`` (``EVENT/label``, or ``CLASSIFICATIONS/EVENT/signal`` when absen
 (``EVENT/weight``), ``folds`` and ``events`` (``EVENT/event``). The cross-validation fold of an event
 is ``EVENT/fold`` by default, whose ids must be exactly 0..K-1 for K folds; with ``n_folds`` it is
 ``fold_of(event, n_folds, fold_seed)`` = ``squares(event) % n_folds`` (``corenet.data.folds``)
-computed from the event numbers, and the file needs no ``EVENT/fold`` column. No generator-level
+computed from the event numbers, and the file needs no ``EVENT/fold`` column. A file with neither
+loads without folds (``has_folds`` False, every fold -1): evaluating or exporting on every event works,
+selecting a fold (``fold_indices``: training, evaluating one fold) raises. No generator-level
 information is read: the roles are chosen from reconstructed quantities only.
 
 A collection's ``features`` are exactly the channels of its tensors. A selector reads the column it
@@ -65,10 +67,12 @@ LABEL_KEYS = (
     "CLASSIFICATIONS/EVENT/signal",
 )  # first one present is used
 WEIGHT_KEY, FOLD_KEY, EVENT_KEY = "EVENT/weight", "EVENT/fold", "EVENT/event"
-FOLD_RULE_EVENT, FOLD_RULE_COLUMN = (
+FOLD_RULE_EVENT, FOLD_RULE_COLUMN, FOLD_RULE_NONE = (
     "squares(event) % n_folds",
     "EVENT/fold",
-)  # H5Dataset.fold_rule
+    "none",
+)  # H5Dataset.fold_rule; "none": the file has no EVENT/fold and no n_folds was given
+NO_FOLD = -1  # the fold of every event of a file loaded without folds
 
 
 # ------------------------------------------------------------------ what the loader reads (shared with corenet-validate)
@@ -180,7 +184,7 @@ class H5Dataset(Dataset):
         fold_seed: int = FOLD_SEED,
     ):
         """``n_folds``: use fold = squares(event) % n_folds (``fold_of``, seed ``fold_seed``) instead of the
-        ``EVENT/fold`` column."""
+        ``EVENT/fold`` column. Without both, the file loads without folds (``has_folds`` is False)."""
         if rest_order not in ("pt", "selector"):
             raise ValueError(
                 f"rest_order must be 'pt' or 'selector', got {rest_order!r}"
@@ -225,14 +229,28 @@ class H5Dataset(Dataset):
                 else torch.arange(n, dtype=torch.int64)
             )
             self.fold_seed = int(fold_seed)
-            self.folds, self.n_folds, self.fold_rule = self._folds(f, n_folds)
+            self.folds, self.n_folds, self.fold_rule = self._folds(f, n_folds, n)
         self.inputs = inputs
 
+    @property
+    def has_folds(self) -> bool:
+        """False when the file has no ``EVENT/fold`` and no ``n_folds`` was given: every fold is NO_FOLD."""
+        return self.fold_rule != FOLD_RULE_NONE
+
+    def require_folds(self, what: str = "selecting a fold") -> None:
+        """Raise KeyError with the remedy when the file was loaded without folds."""
+        if not self.has_folds:
+            raise KeyError(
+                f"{self.path.name}: no {FOLD_KEY} dataset; {what} needs the fold of every event: pass --n-folds K "
+                f"(H5Dataset(n_folds=K)) to use fold = squares(event) % K from {EVENT_KEY}"
+            )
+
     def _folds(
-        self, f: h5py.File, n_folds: int | None
+        self, f: h5py.File, n_folds: int | None, n: int
     ) -> tuple[torch.Tensor, int, str]:
         """(fold of every event, number of folds K, rule): with ``n_folds``, ``fold_of(EVENT/event, n_folds,
-        self.fold_seed)``; else ``EVENT/fold``, whose ids must be exactly 0..K-1."""
+        self.fold_seed)``; else ``EVENT/fold``, whose ids must be exactly 0..K-1; else (no column) every fold
+        is NO_FOLD, K = 0 and the rule is FOLD_RULE_NONE."""
         if n_folds is not None:
             rule = fold_rule(n_folds, self.fold_seed)
             if EVENT_KEY not in f:
@@ -246,10 +264,7 @@ class H5Dataset(Dataset):
             folds = fold_of(f[EVENT_KEY][...], n_folds, self.fold_seed)
             return torch.from_numpy(folds), n_folds, FOLD_RULE_EVENT
         if FOLD_KEY not in f:
-            raise KeyError(
-                f"{self.path.name}: no {FOLD_KEY} dataset; pass --n-folds K (H5Dataset(n_folds=K)) "
-                f"to use fold = squares(event) % K from {EVENT_KEY}"
-            )
+            return torch.full((n,), NO_FOLD, dtype=torch.int64), 0, FOLD_RULE_NONE
         folds = f[FOLD_KEY][...].astype(np.int64)
         ids = np.unique(folds)
         if not np.array_equal(ids, np.arange(len(ids))):
@@ -356,7 +371,8 @@ class H5Dataset(Dataset):
         }
 
     def fold_indices(self, fold: int) -> tuple[np.ndarray, np.ndarray]:
-        """(train_idx, val_idx) holding out ``fold``."""
+        """(train_idx, val_idx) holding out ``fold``; raises KeyError on a file loaded without folds."""
+        self.require_folds(f"holding out fold {fold}")
         val = (self.folds == fold).numpy()
         return np.flatnonzero(~val), np.flatnonzero(val)
 
@@ -367,8 +383,10 @@ __all__ = [
     "FOLD_KEY",
     "FOLD_RULE_COLUMN",
     "FOLD_RULE_EVENT",
+    "FOLD_RULE_NONE",
     "GROUP_ALIASES",
     "LABEL_KEYS",
+    "NO_FOLD",
     "WEIGHT_KEY",
     "H5Dataset",
     "columns_to_read",

@@ -77,7 +77,9 @@ A collection named `x` is read from `INPUTS/x`, matched case-insensitively, or f
   `squares(event) % n_folds`), the number of folds and the seed are stored in the checkpoint, so
   `corenet-evaluate` applies the same rule to any file. `corenet-train --fold k` holds out fold `k`
   for testing and `--exclude-folds j` uses fold `j` for validation (`--exclude-folds next`: fold
-  `(k + 1) % n_folds`).
+  `(k + 1) % n_folds`). Only selecting a fold needs the folds: `corenet-evaluate --fold -1` and
+  `corenet-export` also work on a file with neither `EVENT/fold` nor `--n-folds` (the events then
+  carry fold -1 in the prediction file).
 * **Event identifier.** `EVENT/event` is copied to the prediction files and is the input of the
   `squares(event) % n_folds` rule.
 

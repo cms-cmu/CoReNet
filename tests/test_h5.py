@@ -418,8 +418,10 @@ def test_fold_rule():
 
 
 def test_missing_fold_column(tmp_path):
-    """Without EVENT/fold the loader asks for --n-folds; with it the folds come from EVENT/event."""
+    """Without EVENT/fold (and without n_folds) the file loads without folds: every fold is -1 and selecting a
+    fold asks for --n-folds; with n_folds the folds come from EVENT/event."""
     from corenet.data.folds import fold_of
+    from corenet.data.h5 import FOLD_RULE_NONE, NO_FOLD
 
     src = _need(DATA / "hh4b_small.h5")
     spec = load_config(repo / "examples/hh4b/hh4b.yaml")
@@ -438,9 +440,18 @@ def test_missing_fold_column(tmp_path):
         ):
             g.create_dataset(key, data=f[key][:500])
         event = f["EVENT/event"][:500]
-    with pytest.raises(KeyError, match="no EVENT/fold dataset; pass --n-folds"):
-        H5Dataset(dst, spec)
+    ds0 = H5Dataset(dst, spec)
+    assert not ds0.has_folds and ds0.n_folds == 0 and ds0.fold_rule == FOLD_RULE_NONE
+    assert len(ds0) == 500 and (ds0.folds.numpy() == NO_FOLD).all()
+    assert ds0[3]["fold"] == NO_FOLD and ds0.inputs["b"].shape == (500, 5, 4)
+    with pytest.raises(
+        KeyError, match="no EVENT/fold dataset; holding out fold 0 needs .* pass --n-folds K"
+    ):
+        ds0.fold_indices(0)
+    with pytest.raises(KeyError, match="no EVENT/fold dataset; training needs"):
+        ds0.require_folds("training")
     ds = H5Dataset(dst, spec, n_folds=5)
+    assert ds.has_folds
     assert ds.n_folds == 5 and (ds.folds.numpy() == fold_of(event, 5)).all()
     with h5py.File(dst, "a") as g:
         del g["EVENT/event"]

@@ -22,9 +22,10 @@ the main logits, plus, for every further output ``o``, ``head_weights.get(o, 1.0
 binary cross entropy of its head against ``label == class index of o``. The view (candidate
 selection) scores are not supervised.
 
-Folds: ``EVENT/fold`` of the file, or ``--n-folds K`` for fold = squares(event) % K from the event
-numbers (``corenet.data.folds.fold_of``, seed ``--fold-seed``, 0 = the rule of the example files);
-``--exclude-folds next`` is the fold (k + 1) % n_folds of held-out fold k.
+Folds: ``EVENT/fold`` of the file (ids exactly 0..K-1), or ``--n-folds K`` for fold = squares(event) % K
+from the event numbers (``corenet.data.folds.fold_of``, seed ``--fold-seed``, 0 = the rule of the
+example files); ``--exclude-folds next`` is the fold (k + 1) % K of held-out fold k. Training needs one
+of the two.
 
 For each held-out fold k this writes, in ``--output-dir``:
     model_fold{k}.pkl          checkpoint: state dict, configuration, classes and metadata
@@ -46,7 +47,7 @@ import torch.nn.functional as F
 
 from .checkpoint import save_checkpoint
 from .data.folds import FOLD_SEED
-from .data.h5 import H5Dataset
+from .data.h5 import FOLD_KEY, H5Dataset
 from .evaluate import Batches, count_parameters, predict, write_predictions
 from .models.config import ConfigError, NetworkSpec, parse_config, read_config_dict
 from .models.network import CoReNet
@@ -663,6 +664,11 @@ def main(argv=None):
         n_folds=args.n_folds,
         fold_seed=args.fold_seed,
     )
+    if not ds.has_folds:
+        raise SystemExit(
+            f"{args.input}: no {FOLD_KEY} dataset; training needs the fold of every event: pass --n-folds K "
+            "to use fold = squares(event) % K from EVENT/event"
+        )
     logging.info(
         f"{args.input}: {len(ds):,} events, {ds.n_folds} folds ({ds.fold_rule}), device={device}, recipe "
         + ", ".join(f"{k}={getattr(args, k)}" for k in RECIPE_DEFAULTS)
