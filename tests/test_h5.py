@@ -3,6 +3,7 @@ order, presence flags and padding, the role selectors, the computed event scalar
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import h5py
@@ -445,6 +446,37 @@ def test_missing_fold_column(tmp_path):
         del g["EVENT/event"]
     with pytest.raises(KeyError, match="no EVENT/event dataset"):
         H5Dataset(dst, spec, n_folds=5)
+
+
+def test_fold_ids_must_be_0_to_k(tmp_path):
+    """EVENT/fold ids must be exactly 0..K-1: with a gap K would be miscounted and `next` would pick the wrong
+    fold, so the loader refuses the column (--n-folds K still ignores it); contiguous ids give K and
+    `next` = (k + 1) % K."""
+    from synthetic import write_synthetic
+
+    from corenet.train import resolve_exclude_folds
+
+    path = write_synthetic(tmp_path / "f.h5", "hh4b", n=300)
+    spec = load_config(repo / "examples/hh4b/hh4b.yaml")
+    with h5py.File(path, "a") as f:
+        event = f["EVENT/event"][...]
+        del f["EVENT/fold"]
+        f.create_dataset("EVENT/fold", data=event % 3)
+    ds = H5Dataset(path, spec)
+    assert ds.n_folds == 3 and resolve_exclude_folds(["next"], 2, ds.n_folds) == [0]
+    assert resolve_exclude_folds(["next"], 0, ds.n_folds) == [1]
+    for bad in ([0, 1, 3], [1, 2, 3], [0, 2, 4]):
+        with h5py.File(path, "a") as f:
+            del f["EVENT/fold"]
+            f.create_dataset("EVENT/fold", data=np.array(bad, dtype=np.int64)[event % 3])
+        with pytest.raises(
+            ValueError,
+            match=re.escape(
+                f"EVENT/fold holds the fold ids {bad}; the ids of K folds must be exactly 0..K-1"
+            ),
+        ):
+            H5Dataset(path, spec)
+        assert H5Dataset(path, spec, n_folds=3).n_folds == 3  # the column is ignored
 
 
 def test_selector_sorts_at_file_precision(tmp_path):

@@ -67,8 +67,9 @@ A collection named `x` is read from `INPUTS/x`, matched case-insensitively, or f
   of the event description in order (`1` = signal in both examples).
 * **Weights.** `EVENT/weight` is the event weight (1 when absent). Each class is normalised during
   training, so only the relative weights within a class matter. Negative weights count as 0.
-* **Folds.** The cross-validation fold of an event is `EVENT/fold` when the file has that column.
-  Without it, pass `--n-folds K` to `corenet-train` (and to `corenet-validate`): the fold is then
+* **Folds.** The cross-validation fold of an event is `EVENT/fold` when the file has that column; the
+  ids of `K` folds must be exactly `0 .. K-1`. Without the column, pass `--n-folds K` to
+  `corenet-train` (and to `corenet-validate`): the fold is then
   `squares(event) % K`, a hash of the event number in `EVENT/event` (integers ≥ 0) with the Squares
   counter-based generator (`corenet.data.folds.fold_of`; `--fold-seed`, default 0, selects the hash
   key), so any subset of a sample gets the same folds and no random split is ever made. With

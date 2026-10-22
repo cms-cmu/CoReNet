@@ -295,6 +295,13 @@ BROKEN_FILES = [
         "EVENT/fold not found: corenet-train needs a fold index",
     ),
     (
+        lambda f: _replace(
+            f, "EVENT/fold", np.where(f["EVENT/fold"][...] == 2, 7, f["EVENT/fold"][...])
+        ),
+        "EVENT/fold: fold ids [0, 1, 3, 4, 7] are not 0..K-1 (the ids of K folds must be exactly 0..K-1; "
+        "--exclude-folds next = fold (k + 1) % K): renumber the column or pass --n-folds K",
+    ),
+    (
         lambda f: _replace(f, "EVENT/weight", np.full(400, np.nan, dtype=np.float32)),
         "EVENT/weight: 400 non-finite weights",
     ),
@@ -404,3 +411,16 @@ def test_fold_report(tmp_path):
         "folds = squares(event) % 3, seed 0 (--n-folds): EVENT/event not found"
         in _errors(r)
     )
+
+
+def test_fold_ids_not_contiguous_with_n_folds(tmp_path):
+    """A column whose ids are not 0..K-1 is a FAIL by itself and a WARN with --n-folds (the column is ignored)."""
+    data = write_synthetic(tmp_path / "d.h5", "bbww", n=400)
+    with h5py.File(data, "a") as f:
+        _replace(f, "EVENT/fold", f["EVENT/fold"][...] + 1)
+    r = validate.validate(BBWW, data)
+    assert "EVENT/fold: fold ids [1, 2, 3, 4, 5] are not 0..K-1" in _errors(r)
+    r = validate.validate(BBWW, data, n_folds=5)
+    assert not r.errors
+    assert "fold ids [1, 2, 3, 4, 5] are not 0..K-1" in "\n".join(r.warnings)
+    assert "--n-folds 5 ignores the column" in "\n".join(r.warnings)

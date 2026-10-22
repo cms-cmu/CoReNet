@@ -12,9 +12,9 @@ One loader serves every topology: it reads the collections named in the configur
 
 plus ``labels`` (``EVENT/label``, or ``CLASSIFICATIONS/EVENT/signal`` when absent), ``weights``
 (``EVENT/weight``), ``folds`` and ``events`` (``EVENT/event``). The cross-validation fold of an event
-is ``EVENT/fold`` by default; with ``n_folds`` it is ``fold_of(event, n_folds, fold_seed)`` =
-``squares(event) % n_folds`` (``corenet.data.folds``) computed from the event numbers, and the file
-needs no ``EVENT/fold`` column. No generator-level
+is ``EVENT/fold`` by default, whose ids must be exactly 0..K-1 for K folds; with ``n_folds`` it is
+``fold_of(event, n_folds, fold_seed)`` = ``squares(event) % n_folds`` (``corenet.data.folds``)
+computed from the event numbers, and the file needs no ``EVENT/fold`` column. No generator-level
 information is read: the roles are chosen from reconstructed quantities only.
 
 A collection's ``features`` are exactly the channels of its tensors. A selector reads the column it
@@ -231,8 +231,8 @@ class H5Dataset(Dataset):
     def _folds(
         self, f: h5py.File, n_folds: int | None
     ) -> tuple[torch.Tensor, int, str]:
-        """(fold of every event, number of folds, rule): ``EVENT/fold`` (n_folds = the number of distinct
-        values) or, with ``n_folds``, ``fold_of(EVENT/event, n_folds, self.fold_seed)``."""
+        """(fold of every event, number of folds K, rule): with ``n_folds``, ``fold_of(EVENT/event, n_folds,
+        self.fold_seed)``; else ``EVENT/fold``, whose ids must be exactly 0..K-1."""
         if n_folds is not None:
             rule = fold_rule(n_folds, self.fold_seed)
             if EVENT_KEY not in f:
@@ -251,7 +251,14 @@ class H5Dataset(Dataset):
                 f"to use fold = squares(event) % K from {EVENT_KEY}"
             )
         folds = f[FOLD_KEY][...].astype(np.int64)
-        return torch.from_numpy(folds), len(np.unique(folds)), FOLD_RULE_COLUMN
+        ids = np.unique(folds)
+        if not np.array_equal(ids, np.arange(len(ids))):
+            shown = ids[:12].tolist() + (["..."] if len(ids) > 12 else [])
+            raise ValueError(
+                f"{self.path.name}: {FOLD_KEY} holds the fold ids {shown}; the ids of K folds must be exactly "
+                f"0..K-1 (--exclude-folds next = fold (k + 1) % K); renumber the column or pass --n-folds K"
+            )
+        return torch.from_numpy(folds), len(ids), FOLD_RULE_COLUMN
 
     # ---------------------------------------------------------------- construction
     def _role_tensor(
