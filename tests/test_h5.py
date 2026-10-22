@@ -446,7 +446,7 @@ def test_missing_fold_column(tmp_path):
     assert ds0[3]["fold"] == NO_FOLD and ds0.inputs["b"].shape == (500, 5, 4)
     with pytest.raises(
         KeyError,
-        match="no EVENT/fold dataset; holding out fold 0 needs .* pass --n-folds K",
+        match=r"no EVENT/fold dataset; holding out fold 0 needs .* pass --n-folds K",
     ):
         ds0.fold_indices(0)
     with pytest.raises(KeyError, match="no EVENT/fold dataset; training needs"):

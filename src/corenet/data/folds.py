@@ -26,7 +26,7 @@ import numpy as np
 _UINT64_32 = np.uint64(32)
 
 # a runtime alias (not an annotation): typing.Union, so that the module imports on Python 3.9
-SeedLike = Union[int, str, Iterable[Union[int, str]]]
+SeedLike = Union[int, str, Iterable[Union[int, str]]]  # noqa: UP007
 
 
 def _str_to_entropy(text: str) -> list[np.uint64]:
