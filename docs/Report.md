@@ -42,8 +42,7 @@ Per fold `k`, in `--run-dir`:
 | `predictions_fold{k}.h5` | predictions on the held-out fold | ROC, AUC, scores, view probabilities, pairing accuracy |
 | `eval_fold{k}.h5` | `corenet-evaluate` output; with `--fold -1` every event of the file | the training and validation folds in the ROC, AUC and score figures (overtraining check) |
 
-A fold with some of these files missing is reported with what is there; the last section of the page lists
-what could not be produced and why.
+A fold with some of these files missing is reported with what is there.
 
 ## Output
 

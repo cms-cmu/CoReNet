@@ -11,8 +11,7 @@ present, the generator-level ``TARGETS``.
 
 Sections: run summary, training curves, classification (ROC, AUC, scores, confusion matrix, auxiliary
 heads), hypotheses and pairing (view probabilities, pairing accuracy against ``TARGETS``), the inputs
-as the network embeds them, the raw inputs, the event weights, further checks, and the list of what
-could not be produced for the run. Every figure is embedded as PNG; the page needs no other file.
+as the network embeds them, the raw inputs, the event weights and further checks. Every figure is embedded as PNG; the page needs no other file.
 """
 
 from __future__ import annotations
@@ -573,9 +572,6 @@ class Report:
                 )
             )
         else:
-            parts.append(
-                note("No training recipe recorded (no history or checkpoint).")
-            )
             self.gaps.append(
                 "training recipe: no history_fold*.json or model_fold*.pkl"
             )
@@ -659,7 +655,7 @@ class Report:
         ]
         if not with_hist:
             self.gaps.append("training curves: no history_fold*.json with epochs")
-            return note("No history file with epochs: no training curves.")
+            return ""
         keys = [
             ("train_loss", "training loss"),
             ("val_loss", "validation loss"),
@@ -695,9 +691,6 @@ class Report:
         if not any_val:
             self.gaps.append(
                 "validation curves: the histories have no validation entries (train with --exclude-folds)"
-            )
-            out += note(
-                "No validation fold in the histories: validation loss and AUC are empty."
             )
         rows = []
         for fd in with_hist:
@@ -744,17 +737,12 @@ class Report:
     def section_classification(self) -> str:
         if not any("test" in fd.splits for fd in self.folds):
             self.gaps.append("classification: no prediction file for any fold")
-            return note(
-                "No prediction file: no ROC curves, AUC table or score distributions."
-            )
+            return ""
         parts = []
         curves = self._main_curves()
         if not curves:
             self.gaps.append(
                 "ROC curves: the predicted events have only one class (no signal or no background)"
-            )
-            parts.append(
-                note("The predicted events hold a single class: no ROC curve.")
             )
         else:
             fig, (a, b) = plt.subplots(1, 2, figsize=(7.8, 3.4))
@@ -828,10 +816,8 @@ class Report:
             )
             for name in ("validation", "train"):
                 if name not in curves:
-                    parts.append(
-                        note(
-                            f"No predictions on the {name} folds (corenet-evaluate --fold -1 provides them)."
-                        )
+                    self.gaps.append(
+                        f"ROC curves: no predictions on the {name} folds (corenet-evaluate --fold -1 provides them)"
                     )
 
         # score distributions
@@ -881,7 +867,7 @@ class Report:
                     cm[i, j] += w[(s.label == i) & (pred == j)].sum()
         present = [i for i in range(n) if cm[i].sum() > 0]
         if not present:
-            return note("Confusion matrix: no test events.")
+            return ""
         norm = cm / np.where(cm.sum(1, keepdims=True) > 0, cm.sum(1, keepdims=True), 1)
         fig, ax = plt.subplots(figsize=(1.2 * n + 2.2, 1.0 * n + 1.6))
         im = ax.imshow(norm[present], cmap="Blues", vmin=0, vmax=1)
@@ -1025,14 +1011,11 @@ class Report:
         parts = []
         if not hyps:
             if test:
-                parts.append(
-                    note(
-                        "Every hypothesis has a single candidate: no view probabilities."
-                    )
+                self.gaps.append(
+                    "hypotheses: every hypothesis has a single candidate (no view probabilities)"
                 )
             else:
                 self.gaps.append("hypotheses: no prediction file")
-                parts.append(note("No prediction file: no view probabilities."))
             return "".join(parts)
         fig, axes = grid_figure(len(hyps), per_row=3, w=3.2, h=2.6)
         for ax, h in zip(axes, hyps):
@@ -1142,9 +1125,7 @@ class Report:
             self.gaps.append(
                 "pairing accuracy: the input file has no TARGETS group (generator-matched jets)"
             )
-            return note(
-                "No TARGETS in the input file: the pairing accuracy against the generator matching cannot be computed."
-            )
+            return ""
         parts = []
         sel = self.ds.selected
         for h in hyps:
@@ -1159,11 +1140,6 @@ class Report:
             if not matched:
                 self.gaps.append(
                     f"pairing accuracy of {h}: no TARGETS group named like one of its nodes ({sorted(declared)}; TARGETS has {sorted(targets)})"
-                )
-                parts.append(
-                    note(
-                        f"{h}: no TARGETS group matches a node of the hypothesis ({', '.join(sorted(declared))}); TARGETS groups: {', '.join(sorted(targets))}."
-                    )
                 )
                 continue
             # per matched node: the sorted file slots of its generator-matched jets (truth) and of its
@@ -1235,18 +1211,11 @@ class Report:
                         == t
                     ).all(1)
             if not usable:
-                parts.append(
-                    note(
-                        f"{h}: the matched TARGETS groups ({', '.join(matched)}) list a different number of jets than the nodes they name."
-                    )
+                self.gaps.append(
+                    f"pairing accuracy of {h}: the matched TARGETS groups ({', '.join(matched)}) list a different number of jets than the nodes they name"
                 )
                 continue
             if all(np.array_equal(correct[0], correct[v]) for v in range(1, V)):
-                parts.append(
-                    note(
-                        f"{h}: the TARGETS groups {', '.join(g for g, _ in usable)} do not distinguish the {V} views (every view assigns their jets the same way): no pairing accuracy."
-                    )
-                )
                 self.gaps.append(
                     f"pairing accuracy of {h}: the TARGETS groups do not distinguish its views"
                 )
@@ -1633,12 +1602,6 @@ class Report:
             parts.append(
                 figure(fig, "Event scalars as read or computed by the loader.")
             )
-        if not spec.roles and not singles and not spec.event:
-            parts.append(
-                note(
-                    "The configuration declares no roles, single objects or event scalars."
-                )
-            )
         return "".join(parts)
 
     # ---- weights
@@ -1815,10 +1778,8 @@ class Report:
             if "nSelJets" in name:
                 profiles.append((name, ds.inputs["event"][idx].numpy()[:, j]))
         if not profiles:
-            parts.append(
-                note(
-                    "No jet role or jet multiplicity in the configuration: no weight profiles."
-                )
+            self.gaps.append(
+                "weight profiles: no jet role or jet multiplicity in the configuration"
             )
             return "".join(parts)
         fig, axes = grid_figure(len(profiles), per_row=3, w=3.2, h=2.6)

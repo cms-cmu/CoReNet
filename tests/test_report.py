@@ -1,9 +1,10 @@
 """corenet-report on 2-epoch synthetic trainings (CPU): the HTML file exists, is small, holds every section,
 renders the pairing accuracy when the file has TARGETS and the overtraining check when corenet-evaluate
-predictions of every event exist, and lists the gaps when they do not."""
+predictions of every event exist, and leaves those figures out when they do not."""
 
 from __future__ import annotations
 
+import re
 import tempfile
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from test_train import BBWW, HH4B, _train
 
 from corenet import evaluate, report
 
-HEADINGS = [t for _, t in report.SECTIONS]
+HEADINGS = [f"{i + 1}. {t}" for i, (_, t) in enumerate(report.SECTIONS)]
 MAX_BYTES = 4_000_000
 
 
@@ -66,8 +67,11 @@ def _report(out_dir: Path, data: Path, *extra: str) -> str:
     assert out.is_file(), out
     assert out.stat().st_size < MAX_BYTES, out.stat().st_size
     page = out.read_text(encoding="utf-8")
-    for heading in HEADINGS:
-        assert heading in page, f"section '{heading}' missing"
+    assert len(HEADINGS) == 8, HEADINGS
+    assert re.findall(r"<h2>(.*?)</h2>", page) == HEADINGS, "the page must hold exactly the eight sections in order"
+    low = page.lower()
+    assert "not produced" not in low, "the 'Not produced' list is back"
+    assert "wall time" not in low, "the wall-time column / note is back"
     assert "could not be produced" not in page, "a section failed"
     assert "data:image/png;base64," in page
     return page
@@ -83,8 +87,8 @@ def test_report_with_targets_and_all_events() -> None:
         _evaluate_all(out_dir, data)
         page = _report(out_dir, data)
         assert "Pairing accuracy of the argmax view of HH" in page
-        assert "no TARGETS" not in page
-        assert "no predictions on the training folds" not in page
+        assert re.search(r"<td>mean ± sd</td><td>[0-9.]+</td><td>[0-9.]+</td><td>[0-9.]+</td>", page)
+        assert "<td>test, train, validation</td></tr>" in page
         assert "overtraining check" in page
         assert "AUC of the main score" in page
         assert "H1 ← b" in page and "HH context" in page and "event scalars" in page
@@ -98,8 +102,17 @@ def test_report_without_targets_and_train_predictions() -> None:
         out_dir = tmp / "run"
         _train(data, out_dir)
         page = _report(out_dir, data, "--max-events", "500")
-        assert "no TARGETS" in page
-        assert "no predictions on the training folds" in page
+        # hypotheses: view probabilities and argmax shares, but no pairing accuracy (no TARGETS)
+        assert "Highest view probability per event and class on the test folds" in page
+        assert "Weighted share of the argmax view, test folds: HH" in page
+        assert "Pairing accuracy" not in page and "against TARGETS" not in page
+        # classification: AUC on the test fold only, no train / validation curves, no overtraining overlay
+        assert re.search(r"<td>mean ± sd</td><td>[0-9.]+</td><td>-</td><td>-</td>", page)
+        assert "overtraining check" not in page
+        assert "<td>test</td></tr>" in page and "test, train, validation" not in page
+        low_page = page.lower()
+        assert "pairing accuracy" not in low_page
+        assert "No predictions on the" not in page
         assert "random subsample" in page
 
 
