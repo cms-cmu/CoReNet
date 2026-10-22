@@ -7,12 +7,15 @@ configurations (HH -> 4b: 2 classes; HH -> bbWW: 3 classes and an auxiliary ttba
   4. the checkpoint is self-contained and corenet-evaluate reproduces the training-time predictions,
   5. the `trainer:` section of the configuration sets the recipe and the command line overrides it,
   6. the fine-tuning stage (finetune_layers / finetune_lr / finetune_batch_size) and its defaults,
-  7. the fold rule (--n-folds, --exclude-folds next) and its record in checkpoint and predictions.
+  7. the fold rule (--n-folds, --exclude-folds next) and its record in checkpoint and predictions,
+  8. the guards: ghost batches divide the fine-tuning batch size, finetune_layers prefixes must match,
+     early stopping needs a validation AUC, a file without folds trains not but evaluates and exports.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -497,6 +500,36 @@ def test_finetune_layers_must_match() -> None:
     with pytest.raises(ConfigError, match="nosuch"):
         train.freeze_heads(model, ["nosuch."])
     assert train.count_trainable(model) > 0  # nothing was frozen by the failed call
+
+
+def test_early_stopping_needs_validation() -> None:
+    """--early-stop-patience stops with an error when the validation set is empty (--exclude-folds names the
+    held-out fold) or has no validation AUC (one class in the validation fold); without it both runs proceed."""
+    with tempfile.TemporaryDirectory(prefix="corenet_es_") as tmp:
+        tmp = Path(tmp)
+        data = write_synthetic(tmp / "hh4b_all.h5", "hh4b")
+        with pytest.raises(
+            SystemExit,
+            match=r"--early-stop-patience 1 needs validation events, but --exclude-folds \[0\] leaves none",
+        ):
+            _train(data, tmp / "empty", "--exclude-folds", "0", "--early-stop-patience", "1", epochs=1)
+        h = _train(data, tmp / "empty_ok", "--exclude-folds", "0", epochs=1)
+        assert h["n_val"] == 0 and "val_loss" not in h["history"][0]
+        one = tmp / "oneclass.h5"
+        shutil.copy(data, one)
+        with h5py.File(one, "a") as f:
+            label, fold = f["EVENT/label"][...], f["EVENT/fold"][...]
+            label[fold == 1] = 0
+            del f["EVENT/label"]
+            f.create_dataset("EVENT/label", data=label)
+        with pytest.raises(
+            SystemExit,
+            match=r"epoch 0: no validation AUC, so --early-stop-patience cannot be applied: the validation folds \[1\] hold \{'rest': \d+, 'signal': 0\}",
+        ):
+            _train(one, tmp / "oneclass", "--early-stop-patience", "1", epochs=1)
+        h = _train(one, tmp / "oneclass_ok", epochs=1)
+        assert h["n_val"] > 0 and "val_auc" not in h["history"][0]
+        assert np.isfinite(h["history"][0]["val_loss"])
 
 
 def test_file_without_folds() -> None:

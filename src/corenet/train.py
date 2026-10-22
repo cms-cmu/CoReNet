@@ -26,7 +26,8 @@ selection) scores are not supervised.
 Folds: ``EVENT/fold`` of the file (ids exactly 0..K-1), or ``--n-folds K`` for fold = squares(event) % K
 from the event numbers (``corenet.data.folds.fold_of``, seed ``--fold-seed``, 0 = the rule of the
 example files); ``--exclude-folds next`` is the fold (k + 1) % K of held-out fold k. Training needs one
-of the two.
+of the two. ``--early-stop-patience`` needs a validation set with events of class 1 and of another
+class; an empty validation set or a missing validation AUC stops the run with an error.
 
 For each held-out fold k this writes, in ``--output-dir``:
     model_fold{k}.pkl          checkpoint: state dict, configuration, classes and metadata
@@ -283,6 +284,12 @@ def train_fold(
     logging.info(
         f"fold {fold}: {len(train_idx):,} training / {len(val_idx):,} validation / {len(test_idx):,} held-out events"
     )
+    if args.early_stop_patience and not len(val_idx):
+        raise SystemExit(
+            f"fold {fold}: --early-stop-patience {args.early_stop_patience} needs validation events, but "
+            f"--exclude-folds {exclude_folds} leaves none (held-out fold {fold}; folds 0..{ds.n_folds - 1}): "
+            "exclude a fold other than the held-out one"
+        )
 
     model = CoReNet(spec, device=str(device)).to(device)
     logging.info(
@@ -417,9 +424,19 @@ def train_fold(
                 else ""
             )
         )
-        if args.early_stop_patience and len(val_idx):
+        if args.early_stop_patience:
             auc = entry.get("val_auc")
-            if auc is not None and (best_auc is None or auc > best_auc):
+            if auc is None or not np.isfinite(auc):
+                val_label = labels[val_idx]
+                counts = {
+                    c: int((val_label == i).sum()) for i, c in enumerate(spec.classes)
+                }
+                raise SystemExit(
+                    f"fold {fold}: epoch {epoch}: no validation AUC, so --early-stop-patience cannot be applied: "
+                    f"the validation folds {exclude_folds} hold {counts} events (positive-weight events of "
+                    f"class 1 `{spec.classes[1]}` and of another class are needed)"
+                )
+            if best_auc is None or auc > best_auc:
                 best_auc, best_epoch, bad = auc, epoch, 0
                 best_state = {
                     k: v.detach().clone() for k, v in model.state_dict().items()
