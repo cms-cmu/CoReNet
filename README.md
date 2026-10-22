@@ -128,9 +128,11 @@ corenet-train --config examples/bbww/bbww.yaml --input examples/data/bbww_all.h5
 * `--fold 0`: hold out fold 0 for testing. With `--fold -1` (the default), train one model per fold in turn.
 * `--exclude-folds 1`: keep fold 1 out of the training and use it for validation. `--exclude-folds next`
   uses the fold `(k + 1) % n_folds` of the held-out fold `k`.
-* `--n-folds 5`: take the fold of an event as `event % 5` from `EVENT/event` instead of the `EVENT/fold`
-  column ([docs/Dataset.md](docs/Dataset.md)); the rule is stored in the checkpoint and reused by
-  `corenet-evaluate`.
+* `--n-folds 5`: take the fold of an event as `squares(event) % 5`, a hash of the event number in
+  `EVENT/event`, instead of the `EVENT/fold` column ([docs/Dataset.md](docs/Dataset.md)); `--fold-seed`
+  (default 0) selects the hash key. The rule, the number of folds and the seed are stored in the
+  checkpoint and reused by `corenet-evaluate`. With 5 folds and seed 0 the rule equals the
+  `EVENT/fold` column of the example files.
 * `--early-stop-patience 5`: stop when the validation AUC has not improved for 5 epochs and keep the best epoch.
 * `--freeze-epoch 15 --finetune-layers head_main. head_reduce. aux_heads. --finetune-lr 1.0e-3 --finetune-batch-size 4096`:
   the fine-tuning stage; from epoch 15 on only the parameters whose names start with the given prefixes
@@ -139,8 +141,8 @@ corenet-train --config examples/bbww/bbww.yaml --input examples/data/bbww_all.h5
 * `--epochs`, `--lr`, `--seed`, ...: override the training settings of the configuration file.
   See [docs/Options.md](docs/Options.md) or `corenet-train --help`.
 
-The folds come from the input file: the `EVENT/fold` column, or `event % K` with `--n-folds K`
-([docs/Dataset.md](docs/Dataset.md)). The example files have 5 folds in `EVENT/fold`.
+The folds come from the input file: the `EVENT/fold` column, or `squares(event) % K` with
+`--n-folds K` ([docs/Dataset.md](docs/Dataset.md)). The example files have 5 folds in `EVENT/fold`.
 
 Per fold `k`, the output directory receives:
 
