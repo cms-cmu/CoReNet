@@ -847,15 +847,17 @@ class Report:
                 self.gaps.append(f"pairing accuracy of {h}: no TARGETS group named like one of its nodes ({sorted(declared)}; TARGETS has {sorted(targets)})")
                 parts.append(note(f"{h}: no TARGETS group matches a node of the hypothesis ({', '.join(sorted(declared))}); TARGETS groups: {', '.join(sorted(targets))}."))
                 continue
-            # truth: per matched node the sorted file slots of its generator-matched jets, and which roles it uses
+            # per matched node: the sorted file slots of its generator-matched jets (truth) and of its
+            # candidate under every view; sibling nodes that are interchangeable (H1 / H2) are compared as
+            # a set, so that swapping them does not count as a wrong assignment
             n = len(self.ds)
             correct = np.ones((V, n), bool)
             complete = np.ones(n, bool)
             contained = np.ones(n, bool)
             usable = []
+            truth_of, views_of = {}, {}
             for g, node in matched.items():
                 truth = np.stack(list(targets[g].values()), 1)  # (n, k) file slots
-                truth_sorted = np.sort(truth, 1)
                 assignments = [self._view_assignments(h, v).get(node) for v in range(V)]
                 pairs = [[(r, s) for r, s in a if r in sel] if a is not None else None for a in assignments]
                 if any(p is None or len(p) != truth.shape[1] for p in pairs):
@@ -866,9 +868,30 @@ class Report:
                 pool = np.concatenate([sel[r] for r in roles], 1)  # (n, slots) file slots of the roles
                 for col in range(truth.shape[1]):
                     contained &= (pool == truth[:, col : col + 1]).any(1)
-                for v, p in enumerate(pairs):
-                    view_slots = np.sort(np.stack([sel[r][:, slot] for r, slot in p], 1), 1)
-                    correct[v] &= (view_slots == truth_sorted).all(1)
+                truth_of[node] = np.sort(truth, 1)
+                views_of[node] = [np.sort(np.stack([sel[r][:, slot] for r, slot in p], 1), 1) for p in pairs]
+            # groups of interchangeable siblings that are all matched
+            grouped, groups = set(), []
+            for parent in declared:
+                nt = T.nodes.get(T.aliases.get(parent, parent))
+                kids = self.spec.nodes[parent].children if parent in self.spec.nodes else []
+                if nt is not None and nt.symmetric_children and len(kids) > 1 and all(k in truth_of for k in kids):
+                    groups.append(list(kids))
+                    grouped.update(kids)
+
+            def key(slots):  # one integer per sorted slot tuple
+                base = 1 << 16
+                return sum((slots[:, j].astype(np.int64) + 1) * base**j for j in range(slots.shape[1]))
+
+            for node in truth_of:
+                if node in grouped:
+                    continue
+                for v in range(V):
+                    correct[v] &= (views_of[node][v] == truth_of[node]).all(1)
+            for kids in groups:
+                t = np.sort(np.stack([key(truth_of[k]) for k in kids], 1), 1)
+                for v in range(V):
+                    correct[v] &= (np.sort(np.stack([key(views_of[k][v]) for k in kids], 1), 1) == t).all(1)
             if not usable:
                 parts.append(note(f"{h}: the matched TARGETS groups ({', '.join(matched)}) list a different number of jets than the nodes they name."))
                 continue
