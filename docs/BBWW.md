@@ -11,7 +11,7 @@ with its own score.
 
 `examples/data/bbww_small.h5` (20,000 events: 1,198 HH, 18,802 tt̄; 10.2 MB) is a random subsample of
 `examples/data/bbww_all.h5` (292,285 events: 17,511 HH, 274,774 tt̄; 149 MB), which is distributed
-separately ([DOI / URL to be added]); download it into `examples/data/`. The layout
+separately on Zenodo ([doi:10.5281/zenodo.23567532](https://doi.org/10.5281/zenodo.23567532)); download it into `examples/data/`. The layout
 ([Dataset.md](./Dataset.md)):
 
 | path | shape | meaning |

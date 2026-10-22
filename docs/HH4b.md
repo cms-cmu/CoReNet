@@ -9,7 +9,7 @@ and export. Every command is run from the repository root in the pixi environmen
 
 The repository ships `examples/data/hh4b_small.h5` (20,000 events, 8.1 MB), a random subsample of the
 full file `examples/data/hh4b_all.h5` (454,261 events: 417,978 multijet, 36,283 HH; 184 MB). The full
-file is distributed separately ([Zenodo DOI to be added]); download it into `examples/data/`. Both
+file is distributed separately on Zenodo ([doi:10.5281/zenodo.23567532](https://doi.org/10.5281/zenodo.23567532)); download it into `examples/data/`. Both
 files have the same layout ([Dataset.md](./Dataset.md)):
 
 | path | shape | dtype | meaning |

@@ -98,7 +98,7 @@ need not be a feature, and a feature named `btag` would be one more network inpu
 file holds all jets of the event, and the b jets are chosen when it is loaded. For more details on specifying the event decay, check [docs/EventInfo.md](docs/EventInfo.md), and for the input file itself, check [docs/Dataset.md](docs/Dataset.md).
 
 The full-statistics files (454,261 HH → bb̄bb̄ events, 292,285 HH → bb̄WW events) are distributed
-separately ([DOI / URL to be added]); download them into `examples/data/` as `hh4b_all.h5` and
+separately on Zenodo ([doi:10.5281/zenodo.23567532](https://doi.org/10.5281/zenodo.23567532)); download them into `examples/data/` as `hh4b_all.h5` and
 `bbww_all.h5`.
 
 ## Usage
