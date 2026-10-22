@@ -11,7 +11,9 @@ One loader serves every topology: it reads the collections named in the configur
     inputs["event"]   (N, len(spec.event))                  event scalars in the configured order
 
 plus ``labels`` (``EVENT/label``, or ``CLASSIFICATIONS/EVENT/signal`` when absent), ``weights``
-(``EVENT/weight``), ``folds`` and ``events`` (``EVENT/event``). The cross-validation fold of an event
+(``EVENT/weight``), ``folds`` and ``events`` (``EVENT/event``), and ``selected`` (role -> (N, n) int64:
+the slot of the file each role slot was taken from, -1 for a padded slot; ``corenet-report`` uses it to
+compare the candidates with ``TARGETS``). The cross-validation fold of an event
 is ``EVENT/fold`` by default, whose ids must be exactly 0..K-1 for K folds; with ``n_folds`` it is
 ``fold_of(event, n_folds, fold_seed)`` = ``squares(event) % n_folds`` (``corenet.data.folds``)
 computed from the event numbers, and the file needs no ``EVENT/fold`` column. A file with neither
@@ -196,6 +198,9 @@ class H5Dataset(Dataset):
         self._last_keys: dict[
             str, tuple[np.ndarray, ...]
         ] = {}  # per collection: sort keys of the last explicit selector
+        self.selected: dict[
+            str, np.ndarray
+        ] = {}  # per role: (N, n) file slot of every role slot, -1 when padded
         inputs: dict[str, torch.Tensor] = {}
 
         with h5py.File(path, "r") as f:
@@ -298,6 +303,7 @@ class H5Dataset(Dataset):
         rows = np.arange(len(present))[:, None]
         for j in range(role.n):  # mark the chosen members as consumed
             taken[rows[:, 0], idx[:, j]] |= valid[:, j]
+        self.selected[role.name] = np.where(valid, idx, -1).astype(np.int64)
         return self._stack(coll, feats, idx, valid)
 
     @staticmethod
