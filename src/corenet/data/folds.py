@@ -8,11 +8,10 @@ the strings ``"delphes_h5"``, ``"fold"`` and the integer ``seed``; the event num
 The fold of an event therefore depends only on its event number, the number of folds and the seed:
 any subset of a sample, in any order, gets the same folds, and no random split is ever made.
 
-This is a copy of the rule of the research converter that wrote the example files
-(``hcr.data.delphes_h5.assign_folds`` with ``hcr.math_tools.random.Squares``), kept bit for bit so
-that the package reproduces their ``EVENT/fold`` column: the shipped files
-``examples/data/{hh4b,bbww}_{small,all}.h5`` were written with ``n_folds=5`` and ``seed=0``, so
-``--n-folds 5`` (``--fold-seed 0``) gives exactly the folds stored in them.
+This is the rule that wrote the ``EVENT/fold`` column of the example files, kept bit for bit so that
+the package reproduces it: the shipped files ``examples/data/{hh4b,bbww}_{small,all}.h5`` were
+written with ``n_folds=5`` and ``seed=0``, so ``--n-folds 5`` (``--fold-seed 0``) gives exactly the
+folds stored in them.
 """
 
 from __future__ import annotations
