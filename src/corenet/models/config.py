@@ -15,6 +15,7 @@ The file grammar::
     attention:   [{W_lep: W_had}, {t_had: t_lep}]                        # query: keys (exclusivity mask inferred)
     relations:   [[lepton, met], [H_bb, met]]   # named pairs -> (log M, dR, dPhi) pixels into the main head
     outputs:     {signal: HH, ttbar: tt}        # first = main score; names are the classes (labels 1, 2, ...)
+    labels:      [multijet, HH, ttbar]     # labels to train on, in label order (0, 1, 2, ...); optional
     combine:     [HH, tt]                       # must contain the main hypothesis
     training:    {features: 8, attention_heads: 2, ...}                  # network-wide options
     trainer:     {epochs: 20, lr: 0.01, ...}    # optional training-recipe defaults, read by corenet-train only
@@ -42,6 +43,7 @@ SECTIONS = (
     "attention",
     "relations",
     "outputs",
+    "labels",
     "combine",
     "training",
     "trainer",
@@ -131,12 +133,22 @@ class NetworkSpec:
         default_factory=dict
     )  # node -> hypothesis in which it is declared
     min_jets: int = 4  # minimum jet multiplicity of the selection: nSelJets enters as log(nSelJets - (min_jets - 1))
+    labels: list[str] | None = None  # ``labels:``: the class names in label order (None: rest + outputs)
 
     # ---- derived
     @property
     def classes(self) -> list[str]:
-        """Label convention: 0 = rest, then the outputs in order."""
+        """Label convention: the ``labels:`` list when given, else 0 = rest, then the outputs in order."""
+        if self.labels is not None:
+            return list(self.labels)
         return ["rest"] + [o.name for o in self.outputs]
+
+    @property
+    def main_class(self) -> int:
+        """Class index of the main score (the first output): 1 without ``labels:``."""
+        if self.labels is not None:
+            return self.labels.index(self.outputs[0].name)
+        return 1
 
     @property
     def main(self) -> OutputSpec:
@@ -447,6 +459,17 @@ def parse_config(cfg: dict) -> NetworkSpec:
     for h in combine:
         if h not in hypotheses:
             raise ConfigError(f"combine: {h!r} is not a declared hypothesis")
+    # labels -----------------------------------------------------------------------------------
+    labels = cfg.get("labels")
+    if labels is not None:
+        labels = _str_list(labels, "labels")
+        if len(labels) < 2:
+            raise ConfigError(f"labels: at least two classes are needed, got {labels!r}")
+        for o in outputs:
+            if o.name not in labels:
+                raise ConfigError(
+                    f"outputs.{o.name}: the output name must be one of the labels {labels}"
+                )
     used_h = set(combine) | {o.hypothesis for o in outputs if o.hypothesis}
     for h in hypotheses:
         if h not in used_h:
@@ -496,6 +519,7 @@ def parse_config(cfg: dict) -> NetworkSpec:
         relations,
         owner,
         min_jets,
+        labels,
     )
 
 

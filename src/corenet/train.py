@@ -18,16 +18,16 @@ or in the optional ``trainer:`` section of the configuration, see docs/Options.m
   * per-class weight normalisation (``class_norm``): the event weights of every class sum to 1 over
     the training set; weights are clamped at >= 0 inside the loss.
 
-Loss = weighted cross entropy over ``spec.classes`` (0 = rest, 1 = first output, 2 = second, ...) on
-the main logits, plus, for every further output ``o``, ``head_weights.get(o, 1.0)`` times a weighted
+Loss = weighted cross entropy over ``spec.classes`` (0 = rest, 1 = first output, 2 = second, ...; or the
+``labels:`` list of the configuration in label order) on the main logits, plus, for every further output ``o``, ``head_weights.get(o, 1.0)`` times a weighted
 binary cross entropy of its head against ``label == class index of o``. The view (candidate
 selection) scores are not supervised.
 
 Folds: ``EVENT/fold`` of the file (ids exactly 0..K-1), or ``--n-folds K`` for fold = squares(event) % K
 from the event numbers (``corenet.data.folds.fold_of``, seed ``--fold-seed``, 0 = the rule of the
 example files); ``--exclude-folds next`` is the fold (k + 1) % K of held-out fold k. Training needs one
-of the two. ``--early-stop-patience`` needs a validation set with events of class 1 and of another
-class; an empty validation set or a missing validation AUC stops the run with an error.
+of the two. ``--early-stop-patience`` needs a validation set with events of the main class (``spec.main_class``,
+class 1 without ``labels:``) and of another class; an empty validation set or a missing validation AUC stops the run with an error.
 
 For each held-out fold k this writes, in ``--output-dir``:
     model_fold{k}.pkl          checkpoint: state dict, configuration, classes and metadata
@@ -189,10 +189,12 @@ def normalize_class_weights(
     return w
 
 
-def weighted_auc(label: np.ndarray, score: np.ndarray, weight: np.ndarray) -> float:
-    """ROC AUC (trapezoidal, weighted) of class 1 against everything else, without scikit-learn."""
+def weighted_auc(
+    label: np.ndarray, score: np.ndarray, weight: np.ndarray, positive: int
+) -> float:
+    """ROC AUC (trapezoidal, weighted) of class ``positive`` against everything else, without scikit-learn."""
     order = np.argsort(-score, kind="stable")
-    y, w = label[order] == 1, np.clip(weight[order], 0, None)
+    y, w = label[order] == positive, np.clip(weight[order], 0, None)
     tps, fps = np.cumsum(w * y), np.cumsum(w * ~y)
     if tps[-1] <= 0 or fps[-1] <= 0:
         return float("nan")
@@ -203,8 +205,8 @@ def weighted_auc(label: np.ndarray, score: np.ndarray, weight: np.ndarray) -> fl
 
 
 def aux_targets(spec: NetworkSpec) -> dict[str, int]:
-    """Auxiliary head name -> the class label it discriminates (classes = ['rest'] + outputs)."""
-    return {o.name: i + 1 for i, o in enumerate(spec.outputs) if i > 0}
+    """Auxiliary head name -> the class label it discriminates (its index in ``spec.classes``)."""
+    return {o.name: spec.classes.index(o.name) for o in spec.outputs[1:]}
 
 
 def validation_metrics(
@@ -214,7 +216,7 @@ def validation_metrics(
     labels: np.ndarray,
     weights: torch.Tensor,
 ) -> dict:
-    """Weighted cross entropy and signal-vs-rest AUC on the validation fold(s).
+    """Weighted cross entropy and main-class-vs-rest AUC on the validation fold(s).
 
     Side-effect free: the torch RNG state is saved and restored so the training stream is identical
     to a run without validation; the caller restores ghost batches.
@@ -232,8 +234,9 @@ def validation_metrics(
         "val_events": len(label),
         "val_loss": float(-(w * np.log(p)).sum() / max(w.sum(), 1e-12)),
     }
-    if 0 < int((label == 1).sum()) < len(label):
-        out["val_auc"] = weighted_auc(label, probs[:, 1], w)
+    main = model.spec.main_class
+    if 0 < int((label == main).sum()) < len(label):
+        out["val_auc"] = weighted_auc(label, probs[:, main], w, main)
     return out
 
 
@@ -436,7 +439,7 @@ def train_fold(
                 raise SystemExit(
                     f"fold {fold}: epoch {epoch}: no validation AUC, so --early-stop-patience cannot be applied: "
                     f"the validation folds {exclude_folds} hold {counts} events (positive-weight events of "
-                    f"class 1 `{spec.classes[1]}` and of another class are needed)"
+                    f"class {spec.main_class} `{spec.classes[spec.main_class]}` and of another class are needed)"
                 )
             if best_auc is None or auc > best_auc:
                 best_auc, best_epoch, bad = auc, epoch, 0

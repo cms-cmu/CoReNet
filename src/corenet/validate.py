@@ -9,7 +9,7 @@ corenet-validate: check a configuration, and optionally an HDF5 file against it,
    built (candidate enumeration, relation restrictions) and summarised.
 2. Data (with ``--input``): every dataset the loader reads is looked up with the loader's own rules
    (``corenet.data.h5``: group aliases, used collections, computed event scalars, label keys) and its
-   dtype and shape are checked; the labels must lie in 0..len(outputs), the weights must be finite,
+   dtype and shape are checked; the labels must lie in 0..len(classes) - 1, the weights must be finite,
    the folds must exist for training (``EVENT/fold`` with ids exactly 0..K-1, or ``--n-folds K`` for
    fold = squares(event) % K from the event numbers, seed ``--fold-seed``; the report gives the fold
    source and the events per fold); the present members
@@ -358,11 +358,12 @@ def check_data(
             )
         elif length(key, f[key]):
             label = f[key][...].astype(np.int64)
-            bad = np.unique(label[(label < 0) | (label > len(spec.outputs))])
+            top = len(spec.classes) - 1
+            bad = np.unique(label[(label < 0) | (label > top)])
             if len(bad):
                 report.fail(
                     sec,
-                    f"{key}: labels {bad.tolist()} outside 0..{len(spec.outputs)} (classes {spec.classes})",
+                    f"{key}: labels {bad.tolist()} outside 0..{top} (classes {spec.classes})",
                 )
             else:
                 counts = {

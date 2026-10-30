@@ -94,6 +94,11 @@ outputs:
 combine: [HH]
 ```
 
+The optional `labels:` section names the labels to train on, in label order (e.g.
+`labels: [multijet, HH, ttbar]`: label 0 = multijet, 1 = HH, 2 = ttbar). Without it the classes are
+"rest" (label 0) plus the outputs in order; with it every output name must be one of the labels and the
+main score is the class of the first output ([EventInfo.md](docs/EventInfo.md)).
+
 `jets` is the jet collection: `max: 12` is the number of jet slots read per event, and the input file must
 have at least that many. The listed `features` are the inputs of the network: these columns of the input
 file, and only these, are fed to it, for the `b` jets and for the `other` jets alike. \

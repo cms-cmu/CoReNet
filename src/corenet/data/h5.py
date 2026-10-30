@@ -349,11 +349,12 @@ class H5Dataset(Dataset):
         if key not in f:
             return np.zeros(n, dtype=np.int64)
         lab = f[key][...].astype(np.int64)
-        bad = np.unique(lab[(lab < 0) | (lab > len(self.spec.outputs))])
+        top = len(self.spec.classes) - 1
+        bad = np.unique(lab[(lab < 0) | (lab > top)])
         if len(bad):
             raise ValueError(
-                f"{self.path.name}: labels {bad.tolist()} outside 0..{len(self.spec.outputs)} "
-                f"({len(self.spec.outputs)} outputs: {[o.name for o in self.spec.outputs]})"
+                f"{self.path.name}: labels {bad.tolist()} outside 0..{top} "
+                f"(classes {self.spec.classes})"
             )
         return lab
 

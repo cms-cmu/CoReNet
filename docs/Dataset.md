@@ -43,6 +43,8 @@ of shape `[NUM_EVENTS, MAX_JETS]`. Every event is stored with the same number of
 `MAX_JETS`, so events with fewer jets are padded; `MASK` marks a real jet with `True` and a padding
 slot with `False`. Store all jets of the event, not only the b-jet candidates: which jets are the b
 jets is decided by the event description when the file is loaded, so one file serves any choice.
+The loader turns `MASK` into the last channel of every object tensor (+1 real, -1 padding); for the
+`context` objects this channel is fed to the network as given (+1/-1 from the loader).
 
 The column names are the ones used in the event description. The columns listed as `features` there
 are the inputs of the network: `pt`, `eta`, `phi` and `mass` are the kinematics, any other feature
@@ -64,7 +66,9 @@ A collection named `x` is read from `INPUTS/x`, matched case-insensitively, or f
 
 * **Labels.** `EVENT/label` (or, when absent, `CLASSIFICATIONS/EVENT/signal`) holds the class of the
   event: `0` for background not described by a hypothesis ("rest"), and `1, 2, ...` for the outputs
-  of the event description in order (`1` = signal in both examples).
+  of the event description in order (`1` = signal in both examples). A `labels:` section in the event
+  description replaces this convention by its own list of class names in label order
+  ([EventInfo.md](./EventInfo.md)).
 * **Weights.** `EVENT/weight` is the event weight (1 when absent). Each class is normalised during
   training, so only the relative weights within a class matter. Negative weights count as 0.
 * **Folds.** The cross-validation fold of an event is `EVENT/fold` when the file has that column; the

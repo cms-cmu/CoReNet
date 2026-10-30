@@ -275,3 +275,38 @@ def test_tth_example_parses():
     assert model.tables["ttH"].nodes["ttH"].n == 12
     n_par = sum(p.numel() for p in model.parameters())
     assert n_par == 3543, n_par
+
+
+def test_labels():
+    """``labels:`` (optional): the classes in label order; every output must be a label; main_class is
+    the class of the first output; without it the classes are rest + outputs and main_class is 1."""
+    s = parse_config(copy.deepcopy(BBWW))
+    assert s.classes == ["rest", "signal", "ttbar"] and s.main_class == 1
+    c = copy.deepcopy(BBWW)
+    c["labels"] = ["ttbar", "multijet", "signal"]
+    s = parse_config(c)
+    assert s.classes == ["ttbar", "multijet", "signal"] and s.main_class == 2
+    model = CoReNet(s, device="cpu")
+    assert model.nC == 3 and set(model.aux_heads) == {"ttbar"}
+    c = copy.deepcopy(HH4B)
+    c["labels"] = ["d4", "d3", "t4", "t3"]
+    c["outputs"] = {"d4": "HH"}
+    s = parse_config(c)
+    assert s.classes == ["d4", "d3", "t4", "t3"] and s.main_class == 0
+    model = CoReNet(s, device="cpu")
+    assert model.nC == 4 and len(model.aux_heads) == 0
+
+
+def test_labels_rejected():
+    c = copy.deepcopy(BBWW)
+    c["labels"] = ["multijet", "signal"]  # ttbar is an output but not a label
+    _fails(c, "outputs.ttbar: the output name must be one of the labels")
+    c = copy.deepcopy(HH4B)
+    c["labels"] = ["signal"]
+    _fails(c, "labels: at least two classes are needed")
+    c = copy.deepcopy(HH4B)
+    c["labels"] = ["signal", "rest", "signal"]
+    _fails(c, "labels: duplicate entries ['signal']")
+    c = copy.deepcopy(HH4B)
+    c["labels"] = ["signal", 3]
+    _fails(c, "labels: expected a list of names")

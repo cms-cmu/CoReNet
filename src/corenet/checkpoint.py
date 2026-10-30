@@ -3,7 +3,7 @@
 {"model":    state dict of CoReNet,
  "config":   the configuration mapping the network was built from (so a checkpoint is self-contained),
  "config_path": path of the configuration file at training time,
- "classes":  ["rest", <outputs>...],
+ "classes":  spec.classes (["rest", <outputs>...], or the ``labels:`` list),
  "metadata": {"fold", "epoch", "exclude_folds", "input", "n_folds", "fold_rule" ("EVENT/fold" or
              "squares(event) % n_folds"), "fold_seed", <training recipe>,
              "finetune_trainable_parameters"},

@@ -14,7 +14,8 @@ multi-candidate hypothesis, the auxiliary head probabilities, the event labels /
 main output, the ROC curve; the AUCs are printed and written as JSON next to it (``<output>.json``).
 
 Metrics use the event weights of the file, clipped at >= 0 (``--unweighted`` ignores them):
-  * main AUC: class 1 (the first output) against every other class, scored by P(class 1);
+  * main AUC: the main class (the class of the first output: class 1 without ``labels:``,
+    ``spec.main_class``) against every other class, scored by its probability;
   * one-vs-rest AUC of every class c present, scored by P(c);
   * the AUC of every auxiliary head against ``label == its class``.
 """
@@ -146,8 +147,9 @@ def compute_metrics(
             return None
         return float(roc_auc_score(y, s, sample_weight=w))
 
-    y_main = label == 1
-    out["auc"]["main"] = auc(y_main, probs[:, 1])
+    main = spec.main_class
+    y_main = label == main
+    out["auc"]["main"] = auc(y_main, probs[:, main])
     out["auc"]["one_vs_rest"] = {
         c: auc(label == i, probs[:, i])
         for i, c in enumerate(spec.classes)
@@ -159,7 +161,7 @@ def compute_metrics(
     }
     roc = None
     if y_main.any() and not y_main.all():
-        fpr, tpr, thr = roc_curve(y_main, probs[:, 1], sample_weight=w)
+        fpr, tpr, thr = roc_curve(y_main, probs[:, main], sample_weight=w)
         roc = {
             "fpr": fpr.astype(np.float32),
             "tpr": tpr.astype(np.float32),
