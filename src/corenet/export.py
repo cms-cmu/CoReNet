@@ -10,7 +10,7 @@ the role tensors and the event scalars exactly as ``corenet.data.H5Dataset`` pro
 positional input per leaf in the order listed in the JSON, then ``event``), with a dynamic batch
 dimension. Its outputs are probabilities:
 
-    class_probabilities       (N, nClasses)   softmax of the main head, classes ["rest", <outputs>...]
+    class_probabilities       (N, nClasses)   softmax of the main head, classes ``spec.classes``
     views_<hypothesis>        (N, V)          softmax over the candidates of every multi-candidate hypothesis
     head_<output>             (N,)            sigmoid of every auxiliary head
 

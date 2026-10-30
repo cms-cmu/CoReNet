@@ -1,4 +1,5 @@
 # CoReNet: Combinatorial Residual Network
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23577720.svg)](https://doi.org/10.5281/zenodo.23577720)
 
 [![CI](https://github.com/cms-cmu/CoReNet/actions/workflows/ci.yml/badge.svg)](https://github.com/cms-cmu/CoReNet/actions/workflows/ci.yml)
 
@@ -19,7 +20,7 @@ pixi shell                       # activate; or prefix every command with `pixi 
 ```
 
 pixi itself is a single static binary (`curl -fsSL https://pixi.sh/install.sh | sh`) that needs no root
-access, so the same commands work on a laptop and on a cluster front end.
+access. The environment is built for Linux (x86-64) with an NVIDIA GPU (CUDA 12).
 
 This installs the command-line tools `corenet-validate`, `corenet-train`, `corenet-evaluate`,
 `corenet-export` and `corenet-report` (each has `--help`), and the Python package `corenet`. The unit tests run with
@@ -94,6 +95,11 @@ outputs:
 combine: [HH]
 ```
 
+The optional `labels:` section names the labels to train on, in label order (e.g.
+`labels: [multijet, HH, ttbar]`: label 0 = multijet, 1 = HH, 2 = ttbar). Without it the classes are
+"rest" (label 0) plus the outputs in order; with it every output name must be one of the labels and the
+main score is the class of the first output ([EventInfo.md](docs/EventInfo.md)).
+
 `jets` is the jet collection: `max: 12` is the number of jet slots read per event, and the input file must
 have at least that many. The listed `features` are the inputs of the network: these columns of the input
 file, and only these, are fed to it, for the `b` jets and for the `other` jets alike. \
@@ -143,7 +149,10 @@ corenet-train --config examples/bbww/bbww.yaml --input examples/data/bbww_all.h5
 * `--freeze-epoch 15 --finetune-layers head_main. head_reduce. aux_heads. --finetune-lr 1.0e-3 --finetune-batch-size 4096`:
   the fine-tuning stage; from epoch 15 on only the parameters whose names start with the given prefixes
   (default: the output layers; `none` freezes nothing) are trained, at this learning rate and batch size
-  (default: the schedule continues).
+  (default: the schedule continues); `--finetune-reset-optimizer` starts a new optimizer and learning-rate
+  schedule at that epoch instead of continuing the main stage's.
+* `--masked-classes SR=d4`: for the events with `EVENT/SR` true, remove the class `d4` from the
+  softmax in training (a blinded signal region); the evaluation uses all classes ([docs/Options.md](docs/Options.md)).
 * `--epochs`, `--lr`, `--seed`, ...: override the training settings of the configuration file.
   See [docs/Options.md](docs/Options.md) or `corenet-train --help`.
 
@@ -269,4 +278,7 @@ class_probabilities, views_HH = sess.run(None, feeds)
 
 If you use this software for a publication, please cite it as given in [CITATION.cff](CITATION.cff)
 (to be completed) and the paper describing the method: [paper reference / arXiv to be added].
+The software is archived on Zenodo with the concept DOI
+[10.5281/zenodo.23577720](https://doi.org/10.5281/zenodo.23577720) (version 1.0.0:
+10.5281/zenodo.23577721); [CITATION.cff](CITATION.cff) holds the citation.
 Released under the MIT licence ([LICENSE](LICENSE)).

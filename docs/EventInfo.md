@@ -12,6 +12,7 @@ hypotheses:  # the decay chains                                      (required)
 attention:   # which candidates are compared with which              (optional)
 relations:   # pairs of objects the classifier looks at              (optional)
 outputs:     # the classes                                           (required)
+labels:      # labels to train on, in label order                    (optional)
 combine:     # the hypotheses the classifier is built from           (required)
 training:    # network settings                                      (optional, see Options.md)
 trainer:     # training settings                                     (optional, see Options.md)
@@ -161,6 +162,16 @@ are `0` for "rest" (any process not listed), then `1, 2, ...` for the outputs in
 first output is the main one: the classifier gives the probability of every class, built from the
 hypotheses in `combine`. Every further output also gets its own score from its hypothesis alone
 (`heads/<output>` in the prediction files). Every hypothesis must appear in `combine` or in `outputs`.
+
+```yaml
+labels: [multijet, HH, ttbar]     # labels to train on, in label order (0, 1, 2, ...); optional
+```
+
+`labels` (optional) names the labels to train on, in label order: label `0` is the first name, `1` the
+second, and so on (at least two, all different). Without it the classes are "rest" plus the outputs, as
+above. With it the classes are exactly these names, every output name must be one of them, and the main
+score is the probability of the class of the first output; auxiliary heads are still built for the
+further outputs only, so a network can have any number of classes without auxiliary heads.
 
 ## `training` and `trainer`
 

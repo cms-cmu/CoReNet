@@ -14,7 +14,8 @@ multi-candidate hypothesis, the auxiliary head probabilities, the event labels /
 main output, the ROC curve; the AUCs are printed and written as JSON next to it (``<output>.json``).
 
 Metrics use the event weights of the file, clipped at >= 0 (``--unweighted`` ignores them):
-  * main AUC: class 1 (the first output) against every other class, scored by P(class 1);
+  * main AUC: the main class (the class of the first output: class 1 without ``labels:``,
+    ``spec.main_class``) against every other class, scored by its probability;
   * one-vs-rest AUC of every class c present, scored by P(c);
   * the AUC of every auxiliary head against ``label == its class``.
 """
@@ -47,7 +48,23 @@ class Batches:
     def __init__(self, ds: H5Dataset, device):
         self.inputs = {k: v.to(device) for k, v in ds.inputs.items()}
         self.labels = ds.labels.to(device)
+        self.flags = {k: v.to(device) for k, v in ds.flags.items()}
+        self.classes = list(ds.spec.classes)
         self.device = device
+
+    def class_mask(
+        self, sel: torch.Tensor, masked_classes: dict, n_classes: int
+    ) -> torch.Tensor | None:
+        """(len(sel), n_classes) bool, True where the class is removed from the event's softmax
+        (``masked_classes``: flag -> class names, for the events with that flag true); None when empty."""
+        if not masked_classes:
+            return None
+        mask = torch.zeros((len(sel), n_classes), dtype=torch.bool, device=self.device)
+        for flag, classes in masked_classes.items():
+            rows = self.flags[flag][sel]
+            for c in classes:
+                mask[rows, self.classes.index(c)] = True
+        return mask
 
     def slice(self, idx: np.ndarray) -> dict[str, torch.Tensor]:
         sel = torch.as_tensor(idx, device=self.device)
@@ -146,8 +163,9 @@ def compute_metrics(
             return None
         return float(roc_auc_score(y, s, sample_weight=w))
 
-    y_main = label == 1
-    out["auc"]["main"] = auc(y_main, probs[:, 1])
+    main = spec.main_class
+    y_main = label == main
+    out["auc"]["main"] = auc(y_main, probs[:, main])
     out["auc"]["one_vs_rest"] = {
         c: auc(label == i, probs[:, i])
         for i, c in enumerate(spec.classes)
@@ -159,7 +177,7 @@ def compute_metrics(
     }
     roc = None
     if y_main.any() and not y_main.all():
-        fpr, tpr, thr = roc_curve(y_main, probs[:, 1], sample_weight=w)
+        fpr, tpr, thr = roc_curve(y_main, probs[:, main], sample_weight=w)
         roc = {
             "fpr": fpr.astype(np.float32),
             "tpr": tpr.astype(np.float32),

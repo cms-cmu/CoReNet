@@ -1,6 +1,6 @@
-# The HH -> bbWW network of bbww.yaml with EVERY tunable option written out at its default value
-# (except reflect_eta, which this example switches off). Training with this file gives the same
-# result as with bbww.yaml. Copy it and edit the values. Reference: docs/Options.md.
+# The HH -> bbWW network of bbww.yaml with EVERY tunable option written out at its default value.
+# Training with this file gives the same result as with bbww.yaml. Copy it and edit the values.
+# Reference: docs/Options.md.
 objects:
   jets:   {features: [pt, eta, phi, mass], max: 12}
   b:      jets btag 2
@@ -41,7 +41,7 @@ training:
   attention_gate: true     # gated comparison of candidates
   kv_projection: true      # reduced-size projections when candidates are compared
   phase_symmetric: true    # phase-symmetric layers
-  reflect_eta: false       # (default true) use the forward-backward symmetry of the detector
+  reflect_eta: true        # use the forward-backward symmetry of the detector
   head_weights: {ttbar: 1.0}   # loss weight of the extra ttbar score (default 1.0)
 
 # ---- training settings (read by corenet-train; a command-line flag overrides the value here)
@@ -52,6 +52,8 @@ trainer:
   lr_gamma: 0.25
   batch_size_init: 1024    # epoch-0 batch size; doubled at epochs 1, 3, 6 and 10 (fixed schedule)
   freeze_epoch: 15         # from this epoch on only the output layers are trained
+  finetune_reset_optimizer: false   # true: new optimizer and lr schedule at freeze_epoch
   class_norm: true         # normalise the event weights of every class to 1 over the training set
   seed: 42                 # random seed; the seed of fold k is seed + k
   rest_order: pt           # order of the jets taken by a `rest` line: pt | selector
+  masked_classes: {}       # flag -> classes removed from the softmax for the flagged events, e.g. {SR: [d4]}

@@ -10,9 +10,10 @@ Structure of one forward pass:
     2. features      log(1+pt), eta, dphi-to-parent, log(1+m) for every child slot; the top node
                      drops phi; event scalars whose name contains ``nSelJets`` enter as
                      log(nSelJets - (min_jets - 1))
-    3. embedding     GBN embed (+ event scalars for leaves) -> conv, per role / node; the ``context``
-                     objects are embedded from their kinematics, a flag and the context role's extra
-                     (non-kinematic) features
+    3. embedding     GBN embed (+ event scalars for leaves) -> conv, per role / node (all slots of one
+                     role in one node in a single call, so they share the ghost-batch statistics); the ``context``
+                     objects are embedded from their kinematics, a flag (the last input channel as
+                     given) and the context role's extra (non-kinematic) features
     4. reinforce     bottom-up ResNetBlock per composite node (a node reused by several
                      hypotheses is computed once); ``context`` attention after the first level;
                      ``attention`` entries as soon as both nodes exist, with the pair
@@ -443,7 +444,7 @@ class CoReNet(nn.Module):
         n = next(iter(inputs.values())).shape[0]
         # per leaf (role or single object): four-vectors (n, 4, slots), its non-kinematic features (isE / isM, ...;
         # every feature of the collection is an input), and which slots hold a real object
-        leaf_kin, leaf_extra, leaf_present, etaSign = {}, {}, {}, None
+        leaf_kin, leaf_extra, leaf_present, leaf_flag, etaSign = {}, {}, {}, {}, None
         for r in self.leaf_order:
             if r not in inputs:
                 continue
@@ -458,6 +459,10 @@ class CoReNet(nn.Module):
             extras = [feats.index(f) for f in self._extras(r)]
             leaf_extra[r] = x[:, extras, :] if extras else None
             leaf_present[r] = x[:, -1, :] != -1  # presence flag is the last channel
+            # the raw flag channel, fed to the context objects as given: the loader writes +1/-1 there (so
+            # this equals where(present, 1, -1)); an external caller may put a 0/1 quality flag in it (-1 =
+            # padded), e.g. a jet-quality flag
+            leaf_flag[r] = x[:, -1, :]
             if self.spec.training.reflect_eta:
                 if etaSign is None:  # leading member of the first role
                     etaSign = 1 - 2 * (kin[:, 1, 0:1] < 0).float()
@@ -486,6 +491,7 @@ class CoReNet(nn.Module):
             "leaf_kin": leaf_kin,
             "leaf_extra": leaf_extra,
             "leaf_present": leaf_present,
+            "leaf_flag": leaf_flag,
             "event": a,
             "hyp": {},
         }
@@ -493,7 +499,7 @@ class CoReNet(nn.Module):
         kin, kinP, present = {}, {}, {}
         for h, T in self.tables.items():
             out["hyp"][h] = self._prepare_hypothesis(
-                h, T, leaf_kin, leaf_extra, leaf_present, kin, kinP, present
+                h, T, leaf_kin, leaf_extra, leaf_present, leaf_flag, kin, kinP, present
             )
         out["kin"], out["kinP"], out["present"] = kin, kinP, present
         # a node reused by several hypotheses is embedded once; its dphi reference is the parent in the
@@ -533,7 +539,7 @@ class CoReNet(nn.Module):
         return out
 
     def _prepare_hypothesis(
-        self, h, T, leaf_kin, leaf_extra, leaf_present, kin, kinP, present
+        self, h, T, leaf_kin, leaf_extra, leaf_present, leaf_flag, kin, kinP, present
     ):
         # kin / kinP / present are shared across hypotheses: a reused node is computed once
         for node in self.levels[h]:
@@ -620,12 +626,20 @@ class CoReNet(nn.Module):
         hs = self.spec.hypotheses[h]
         if hs.context:
             prep["context"] = self._prepare_context(
-                h, T, hs.context, leaf_kin, leaf_extra, leaf_present, kin, kinP
+                h,
+                T,
+                hs.context,
+                leaf_kin,
+                leaf_extra,
+                leaf_present,
+                leaf_flag,
+                kin,
+                kinP,
             )
         return prep
 
     def _prepare_context(
-        self, h, T, crole, leaf_kin, leaf_extra, leaf_present, kin, kinP
+        self, h, T, crole, leaf_kin, leaf_extra, leaf_present, leaf_flag, kin, kinP
     ):
         """Objects = this hypothesis' leaves (jet roles, lepton, MET; flag 2) + the context role (its own flag); pair
         matrices object-object (flag 0) and first-level-candidate-object (flag 1), with masks.
@@ -634,7 +648,10 @@ class CoReNet(nn.Module):
         ``feats`` (n, 4 + E, S) is the embedding input of the objects: log pt, eta, log m, flag, then the E extra
         (non-kinematic) features of the context role in its feature order. An object of another leaf carries the
         same E channels: an extra its own collection also has is taken from its tensor, one it lacks is -1 (the
-        padding value); the pair features are kinematic only and unchanged."""
+        padding value); the pair features are kinematic only and unchanged.
+        The flag of a context-role object is the last channel of its input tensor as given (``leaf_flag``): the
+        loader writes +1 (present) / -1 (padded) there, so for H5 input it is where(present, 1, -1); an external
+        caller may put a 0/1 quality flag there instead. The mask (flag == -1) is unchanged."""
         first = self.levels[h][0]
         # every leaf of the hypothesis (jet roles and single-object collections such as lepton / MET), flag 2
         leaf_roles = [
@@ -647,11 +664,7 @@ class CoReNet(nn.Module):
             parts.append(leaf_kin[r])
             flags.append(2 * torch.ones_like(leaf_kin[r][:, 0:1, :]))
         parts.append(leaf_kin[crole])
-        flags.append(
-            torch.where(leaf_present[crole], 1.0, -1.0)
-            .unsqueeze(1)
-            .to(leaf_kin[crole].dtype)
-        )
+        flags.append(leaf_flag[crole].unsqueeze(1).to(leaf_kin[crole].dtype))
         o = torch.cat([torch.cat(parts, 2), torch.cat(flags, 2)], 1)  # (n,5,S)
         mask = o[:, 4, :] == -1
         S = o.shape[2]
@@ -715,6 +728,24 @@ class CoReNet(nn.Module):
             "P": P,
         }
 
+    # ------------------------------------------------------------------ grouped leaf slots
+    def _leaf_groups(self, nt) -> dict[str, list[int]]:
+        """Leaf role -> the child slots of node table ``nt`` that come from it (in slot order)."""
+        groups: dict[str, list[int]] = {}
+        for j, c in enumerate(nt.children):
+            if c in self.leaves:
+                groups.setdefault(c, []).append(j)
+        return groups
+
+    @staticmethod
+    def _grouped_slots(hp, node, js):
+        """Embedding input (n, F, P * len(js)) and presence (n, P * len(js)) of the slots ``js`` of ``node``,
+        candidate-major, slot-minor (slot js[0] of candidate 0, slot js[1] of candidate 0, ..., candidate 1, ...)."""
+        feats = torch.stack([hp["slot_feats"][node][j] for j in js], dim=3)  # (n,F,P,m)
+        pres = torch.stack([hp["slot_present"][node][j] for j in js], dim=2)  # (n,P,m)
+        n, F_, P, m = feats.shape
+        return feats.reshape(n, F_, P * m), pres.reshape(n, P * m)
+
     # ------------------------------------------------------------------ forward
     def forward(self, inputs):
         prep = self._prepare(inputs)
@@ -731,20 +762,27 @@ class CoReNet(nn.Module):
                     continue  # reused node: computed once
                 nt = T.nodes[node]
                 k = len(nt.children)
-                # child slot pixels: leaves are embedded per slot (padded slots zeroed); composites are gathered
-                cols, cols0 = [], []
+                # child slot pixels: leaves are embedded (padded slots zeroed); composites are gathered.
+                # All slots of one leaf role in this node are embedded in ONE call (pixels candidate-major,
+                # slot-minor), because the ghost-batch statistics of a GBN are taken over all pixels of a call:
+                # the slots of one role in one node must share them (one embedding of
+                # all candidate jets of a dijet layer). Different roles keep separate calls.
+                cols, cols0 = [None] * k, [None] * k
+                for role, js in self._leaf_groups(nt).items():
+                    feats, pres = self._grouped_slots(hp, node, js)
+                    x = self.leaf_embed[role](feats, add=a)
+                    x0 = x.clone()
+                    x = NonLU(x)
+                    keep = pres.unsqueeze(1).to(x.dtype)
+                    x, x0 = x * keep, x0 * keep
+                    x = x.view(n, self.d, nt.n, len(js))
+                    x0 = x0.view(n, self.d, nt.n, len(js))
+                    for i, j in enumerate(js):
+                        cols[j], cols0[j] = x[:, :, :, i], x0[:, :, :, i]
                 for j, c in enumerate(nt.children):
-                    idx = nt.child_index[:, j]
-                    if c in self.leaves:
-                        x = self.leaf_embed[c](hp["slot_feats"][node][j], add=a)
-                        x0 = x.clone()
-                        x = NonLU(x)
-                        keep = hp["slot_present"][node][j].unsqueeze(1).to(x.dtype)
-                        x, x0 = x * keep, x0 * keep
-                    else:
-                        x, x0 = pixels[c][:, :, idx], pixels0[c][:, :, idx]
-                    cols.append(x)
-                    cols0.append(x0)
+                    if c not in self.leaves:
+                        idx = nt.child_index[:, j]
+                        cols[j], cols0[j] = pixels[c][:, :, idx], pixels0[c][:, :, idx]
                 x = torch.stack(cols, dim=3).reshape(n, self.d, nt.n * k)
                 x0 = torch.stack(cols0, dim=3).reshape(n, self.d, nt.n * k)
                 xx = self.node_embed[node](prep["embed_in"][node])
@@ -883,11 +921,10 @@ class CoReNet(nn.Module):
                     continue
                 done.add(node)
                 nt = T.nodes[node]
-                for j, c in enumerate(nt.children):
-                    if c in self.leaves:
-                        self.leaf_embed[c].embed.updateMeanStd(
-                            hp["slot_feats"][node][j], ~hp["slot_present"][node][j]
-                        )
+                # grouped per (node, role) exactly as in forward
+                for role, js in self._leaf_groups(nt).items():
+                    feats, pres = self._grouped_slots(hp, node, js)
+                    self.leaf_embed[role].embed.updateMeanStd(feats, ~pres)
                 self.node_embed[node].embed.updateMeanStd(prep["embed_in"][node])
             if "context" in hp:
                 ctx = hp["context"]

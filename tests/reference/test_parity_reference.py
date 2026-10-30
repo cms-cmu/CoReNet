@@ -9,23 +9,31 @@ checkpoints under ``models/`` are used when present). Nothing is written into th
     CORENET_REFERENCE_REPO=/path/to/reference pytest tests/reference -s
 
 Checks, for the HH -> 4b and HH -> bbWW example configurations:
-  * the example YAML files describe the same network as the reference configurations;
+  * the example YAML files describe the same network as the reference configurations (sections other
+    than ``training`` as written, ``training`` after the defaults are filled in); for HH -> bbWW the
+    reference is the eta-reflection configuration ``configs/hcr/dscan/bbww_reflect_d8.yaml`` and its
+    trained checkpoint ``models/bbww_d8_e20bestreflect_r3_best`` (the paper's model);
   * with the same seed both code bases initialise identical state dicts (same module creation order);
     parameter counts 1,508 and 3,832;
   * the two loaders produce identical input tensors from the same HDF5 file;
-  * identical batches give bit-identical (torch.equal) logits, view logits, auxiliary heads and event
-    pixels in training mode (ghost batches, twice, so that the running statistics update) and in eval
-    mode, identical buffers, identical gradients, and identical parameters after 5 Adam steps;
+  * after updateMeanStd / initMeanStd on identical batches the frozen statistics are identical, except
+    those of the leaf embedders, which agree to float32 rounding (CoReNet accumulates all slots of one
+    leaf role in one node in one call); with the reference statistics copied, eval-mode logits, view
+    logits, auxiliary heads and event pixels are bit-identical (torch.equal). Training-mode outputs,
+    gradients and optimiser steps differ by design (the slots of one leaf role share the ghost-batch
+    statistics) and are pinned by the golden-file test tests/test_training_regression.py;
   * the trained reference checkpoints load strictly into CoReNet and give torch.equal outputs;
   * the primitives (GBN, conv1d, MinimalAttention, ReinforceLayer, ResNetBlock) are bit-identical;
-  * the two trainers, run for 2 epochs with the same arguments, produce bit-identical weights and
-    predictions;
+  * the two trainers, run for 2 epochs with the same arguments, write checkpoints with the same
+    state-dict keys, shapes and integer buffers, predict the same events in the same order and follow
+    the same learning-rate and batch-size schedule (the trained weights differ by design, see above);
   * CoReNet with the 4b configuration reproduces the reference repository's original hard-coded 4b
     network (``hcr.models.HCR.HCR``) loaded from its trained checkpoint, torch.equal.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import sys
 from pathlib import Path
@@ -63,15 +71,15 @@ TOPOLOGIES = {
     ),
     "bbww": dict(
         config=repo / "examples/bbww/bbww.yaml",
-        ref_config=REF / "configs/hcr/bbww.yaml",
-        # models/bbww_d8_r3: trained after W_lep became a plain [lepton, met] sum (models/bbww_d8_r2 predates it)
+        # the eta-reflection configuration of the paper (configs/hcr/bbww.yaml has reflect_eta: false)
+        ref_config=REF / "configs/hcr/dscan/bbww_reflect_d8.yaml",
         data=REF / "data/h5/bbww_all.h5",
         params=3832,
-        ckpt=REF / "models/bbww_d8_r3/model_fold0.pkl",
+        # the paper's bbWW model (best-validation epoch, fold 0), trained with bbww_reflect_d8.yaml
+        ckpt=REF / "models/bbww_d8_e20bestreflect_r3_best/model_fold0.pkl",
     ),
 }
 N_EVENTS = 4096
-GHOST_BATCHES = 16
 
 
 def _cfg(topology):
@@ -136,9 +144,17 @@ def _same_state(ref, new, what):
 @pytest.mark.parametrize("topology", TOPOLOGIES)
 def test_example_config_matches_reference(topology):
     cfg, ref_cfg = _cfg(topology)
-    assert cfg == ref_cfg, (
+
+    def rest(c):
+        return {k: v for k, v in c.items() if k != "training"}
+
+    assert rest(cfg) == rest(ref_cfg), (
         f"{topology}: example configuration differs from the reference"
     )
+    # training options after the defaults are filled in: an omitted key equal to its default passes
+    new_t = dataclasses.asdict(parse_config(cfg).training)
+    ref_t = dataclasses.asdict(ref_parse(ref_cfg).training)
+    assert new_t == ref_t, f"{topology}: training options {new_t} vs {ref_t}"
 
 
 @pytest.mark.parametrize("topology", TOPOLOGIES)
@@ -174,69 +190,57 @@ def test_loader_parity(topology):
     )
 
 
-# ----------------------------------------------------------------------------------- forward / backward
+# ----------------------------------------------------------------------------------- forward (eval mode)
 @pytest.mark.parametrize("topology", TOPOLOGIES)
-def test_forward_backward_parity(topology):
+def test_eval_forward_parity(topology):
+    """Frozen statistics and eval-mode outputs. Training-mode outputs, gradients and optimiser steps are
+    not compared: CoReNet embeds all slots of one leaf role in one node in one call (they share the
+    ghost-batch statistics), the research code embedded every slot on its own;
+    tests/test_training_regression.py pins them instead."""
     ref_ds, new_ds, idx = _data(topology)
     ref, new = _models(topology, seed=3)
     new.load_state_dict(
         ref.state_dict(), strict=True
     )  # explicit copy (no key renaming needed)
-    x_ref, x_new = _batch(ref_ds, idx), _batch(new_ds, idx)
     ref.train()
     new.train()
-    ref.updateMeanStd(x_ref)
-    new.updateMeanStd(x_new)
+    ref.updateMeanStd(_batch(ref_ds, idx))
+    new.updateMeanStd(_batch(new_ds, idx))
     ref.initMeanStd()
     new.initMeanStd()
-    _same_state(ref, new, f"{topology} after initMeanStd")
-    ref.setGhostBatches(GHOST_BATCHES)
-    new.setGhostBatches(GHOST_BATCHES)
-    for mode in ("train", "train", "eval"):
-        getattr(ref, mode)()
-        getattr(new, mode)()
+    # frozen statistics: identical, except those of the leaf embedders, which CoReNet accumulates over all
+    # slots of a role in one call (the same pixels summed in another order: float32 rounding only)
+    rs, ns = ref.state_dict(), new.state_dict()
+    assert list(rs) == list(ns), f"{topology}: state-dict keys differ"
+    rounded = []
+    for k in rs:
+        if torch.equal(rs[k], ns[k]):
+            continue
+        assert k.startswith("leaf_embed.") and k.endswith((".m", ".s")), (
+            f"{topology} after initMeanStd: {k} differs"
+        )
+        torch.testing.assert_close(
+            ns[k], rs[k], rtol=1e-5, atol=1e-6, msg=f"{topology} after initMeanStd: {k}"
+        )
+        rounded.append(k)
+    new.load_state_dict(
+        rs, strict=True
+    )  # the reference statistics in both from here on
+    ref.setGhostBatches(0)
+    new.setGhostBatches(0)
+    ref.eval()
+    new.eval()
+    for _ in range(2):
         with torch.no_grad():
             _same_tree(
                 ref(_batch(ref_ds, idx)),
                 new(_batch(new_ds, idx)),
-                f"{topology} [{mode}] outputs",
+                f"{topology} [eval] outputs",
             )
-        _same_state(ref, new, f"{topology} [{mode}] buffers")
-    # gradients and 5 optimiser steps, training mode
-    ref.train()
-    new.train()
-    opt_r = torch.optim.Adam(ref.parameters(), lr=1e-2)
-    opt_n = torch.optim.Adam(new.parameters(), lr=1e-2)
-    label = ref_ds.labels[idx]
-    for step in range(5):
-        losses = []
-        for m, opt, ds in ((ref, opt_r, ref_ds), (new, opt_n, new_ds)):
-            out = m(_batch(ds, idx))
-            loss = torch.nn.functional.cross_entropy(out["logits"], label)
-            for h in out["heads"].values():
-                loss = loss + h.pow(2).mean()
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-            losses.append(loss.detach())
-        assert torch.equal(losses[0], losses[1]), (
-            f"{topology} step {step}: loss {losses[0]} vs {losses[1]}"
-        )
-        for (k, pr), (_, pn) in zip(ref.named_parameters(), new.named_parameters()):
-            assert (pr.grad is None) == (pn.grad is None), k
-            if pr.grad is not None:
-                assert torch.equal(pr.grad, pn.grad), (
-                    f"{topology} step {step}: gradient of {k} differs"
-                )
-    _same_state(ref, new, f"{topology} after 5 Adam steps")
-    ref.eval()
-    new.eval()
-    with torch.no_grad():
-        o_ref, o_new = ref(_batch(ref_ds, idx)), new(_batch(new_ds, idx))
-    _same_tree(o_ref, o_new, f"{topology} outputs after training steps")
+        _same_state(ref, new, f"{topology} [eval] buffers")
     print(
-        f"    {topology}: {N_EVENTS} events, train x2 / eval / 5 Adam steps: logits, views, heads, event pixel, "
-        f"buffers, gradients and weights torch.equal"
+        f"    {topology}: {N_EVENTS} events: frozen statistics identical except {rounded} (float32 "
+        f"rounding); eval-mode logits, views, heads, event pixel and buffers torch.equal"
     )
 
 
@@ -458,27 +462,36 @@ def test_trainer_parity(topology, tmp_path):
     n = torch.load(
         tmp_path / "new/model_fold0.pkl", map_location="cpu", weights_only=False
     )["model"]
+    # trained weights, predictions and losses differ by design (grouped leaf embedding, see
+    # test_eval_forward_parity); tests/test_training_regression.py pins the training numerics
     assert list(r) == list(n)
     for k in r:
-        assert torch.equal(r[k], n[k]), f"{topology}: trained {k} differs"
+        assert r[k].shape == n[k].shape and r[k].dtype == n[k].dtype, (
+            f"{topology}: trained {k}: shape/dtype {tuple(r[k].shape)} {r[k].dtype} vs "
+            f"{tuple(n[k].shape)} {n[k].dtype}"
+        )
+        if not torch.is_floating_point(r[k]):
+            assert torch.equal(r[k], n[k]), f"{topology}: integer buffer {k} differs"
     with (
         h5py.File(tmp_path / "ref/predictions_fold0.h5") as fr,
         h5py.File(tmp_path / "new/predictions_fold0.h5") as fn,
     ):
-        assert np.array_equal(
-            fr["CLASSIFICATIONS/EVENT/signal"][...], fn["class_probabilities"][...]
+        assert (
+            fr["CLASSIFICATIONS/EVENT/signal"].shape == fn["class_probabilities"].shape
         )
         assert np.array_equal(fr["EVENT/event"][...], fn["EVENT/event"][...])
     import json
 
     hr = json.loads((tmp_path / "ref/history_fold0.json").read_text())["history"]
     hn = json.loads((tmp_path / "new/history_fold0.json").read_text())["history"]
+    assert len(hr) == len(hn) == 2, (len(hr), len(hn))
     for a, b in zip(hr, hn):
-        for key in ("train_loss", "val_loss", "val_auc", "lr", "batch_size"):
+        for key in ("lr", "batch_size"):
             assert a[key] == b[key], (key, a[key], b[key])
     print(
-        f"    {topology}: 2-epoch training on {small.name}: weights, predictions and history identical "
-        f"(train loss {[round(h['train_loss'], 6) for h in hn]})"
+        f"    {topology}: 2-epoch training on {small.name}: same state-dict keys, shapes and integer "
+        f"buffers, same predicted events, same lr / batch-size schedule; train loss (differs by design) "
+        f"reference {[round(h['train_loss'], 6) for h in hr]}, CoReNet {[round(h['train_loss'], 6) for h in hn]}"
     )
 
 

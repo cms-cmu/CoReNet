@@ -30,9 +30,18 @@ def _jets(rng, n, n_slots, n_present, boost):
 
 
 def write_synthetic(
-    path: Path, topology: str, seed: int = 0, n: int = N_EVENTS
+    path: Path,
+    topology: str,
+    seed: int = 0,
+    n: int = N_EVENTS,
+    flag: str | None = None,
+    masked_label: int | None = None,
+    n_violations: int = 0,
 ) -> Path:
-    """A small file in the layout of examples/data/{hh4b,bbww}_small.h5."""
+    """A small file in the layout of examples/data/{hh4b,bbww}_small.h5. ``flag``: also write a boolean
+    ``EVENT/<flag>`` (20% of the events true, from a separate random stream so the other datasets are
+    unchanged); ``masked_label``: no flagged event carries this label, apart from ``n_violations``
+    events of that label forced to true (a blinding error)."""
     rng = np.random.default_rng(seed)
     if topology == "hh4b":
         label = (rng.uniform(size=n) < 0.3).astype(np.int64)  # 0 rest/QCD, 1 signal
@@ -82,4 +91,11 @@ def write_synthetic(
         for c in np.unique(label):  # per-class sum = 1, as the real files
             w[label == c] /= float((label == c).sum())
         f.create_dataset("EVENT/weight", data=w)
+        if flag is not None:
+            frng = np.random.default_rng(seed + 1000)
+            flagged = frng.uniform(size=n) < 0.2
+            if masked_label is not None:
+                flagged &= label != masked_label
+                flagged[np.flatnonzero(label == masked_label)[:n_violations]] = True
+            f.create_dataset(f"EVENT/{flag}", data=flagged)
     return path

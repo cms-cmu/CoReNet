@@ -9,7 +9,7 @@ corenet-validate: check a configuration, and optionally an HDF5 file against it,
    built (candidate enumeration, relation restrictions) and summarised.
 2. Data (with ``--input``): every dataset the loader reads is looked up with the loader's own rules
    (``corenet.data.h5``: group aliases, used collections, computed event scalars, label keys) and its
-   dtype and shape are checked; the labels must lie in 0..len(outputs), the weights must be finite,
+   dtype and shape are checked; the labels must lie in 0..len(classes) - 1, the weights must be finite,
    the folds must exist for training (``EVENT/fold`` with ids exactly 0..K-1, or ``--n-folds K`` for
    fold = squares(event) % K from the event numbers, seed ``--fold-seed``; the report gives the fold
    source and the events per fold); the present members
@@ -108,7 +108,9 @@ def check_config(path, report: Report) -> NetworkSpec | None:
         from .train import build_parser, resolve_recipe
 
         args = resolve_recipe(
-            build_parser().parse_args(["--config", str(path), "--input", "-"]), cfg
+            build_parser().parse_args(["--config", str(path), "--input", "-"]),
+            cfg,
+            spec,
         )
         if cfg.get("trainer"):
             report.ok(
@@ -181,6 +183,7 @@ def check_data(
     n_forward: int = 512,
     n_folds: int | None = None,
     fold_seed: int = FOLD_SEED,
+    masked_classes: dict | None = None,
 ) -> None:
     sec = f"data {path}"
     try:
@@ -358,11 +361,12 @@ def check_data(
             )
         elif length(key, f[key]):
             label = f[key][...].astype(np.int64)
-            bad = np.unique(label[(label < 0) | (label > len(spec.outputs))])
+            top = len(spec.classes) - 1
+            bad = np.unique(label[(label < 0) | (label > top)])
             if len(bad):
                 report.fail(
                     sec,
-                    f"{key}: labels {bad.tolist()} outside 0..{len(spec.outputs)} (classes {spec.classes})",
+                    f"{key}: labels {bad.tolist()} outside 0..{top} (classes {spec.classes})",
                 )
             else:
                 counts = {
@@ -374,6 +378,18 @@ def check_data(
                         report.warn(
                             sec, f"class `{c}` (label {i}) has no events in this file"
                         )
+        if masked_classes:
+            problems = loader.check_masked_classes(f, spec, masked_classes)
+            for p in problems:
+                report.fail(sec, p)
+            if not problems:
+                for flag, classes in masked_classes.items():
+                    n_flag = int(loader.read_flag(f, flag).sum())
+                    report.ok(
+                        sec,
+                        f"masked_classes: {loader.FLAG_GROUP}/{flag} boolean, {n_flag:,} flagged events, "
+                        f"none of the excluded classes {classes}",
+                    )
         if loader.WEIGHT_KEY not in f:
             report.warn(
                 sec, f"{loader.WEIGHT_KEY} not found: every event gets weight 1"
@@ -480,7 +496,12 @@ def check_data(
     # ---- the actual loader and a forward pass
     try:
         ds = loader.H5Dataset(
-            path, spec, rest_order=rest_order, n_folds=n_folds, fold_seed=fold_seed
+            path,
+            spec,
+            rest_order=rest_order,
+            n_folds=n_folds,
+            fold_seed=fold_seed,
+            masked_classes=masked_classes,
         )
     except Exception as e:
         report.fail(sec, f"the loader (H5Dataset) fails: {type(e).__name__}: {e}")
@@ -582,6 +603,14 @@ def validate(
                 )
             except Exception:
                 rest_order = "pt"
+        try:  # an invalid masked_classes is already reported by check_config
+            from .train import check_masked_classes
+
+            trainer = read_config_dict(config).get("trainer") or {}
+            masked_classes = trainer.get("masked_classes") or {}
+            check_masked_classes(masked_classes, spec)
+        except Exception:
+            masked_classes = {}
         check_data(
             data,
             spec,
@@ -589,6 +618,7 @@ def validate(
             rest_order=rest_order,
             n_folds=n_folds,
             fold_seed=fold_seed,
+            masked_classes=masked_classes,
         )
     elif data is not None:
         report.fail(f"data {data}", "not checked: the configuration is invalid")

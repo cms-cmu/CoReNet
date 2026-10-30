@@ -1,5 +1,5 @@
 {
-  "title": "CoReNet: Combinatorial Residual Networks for multijet topologies",
+  "title": "CoReNet: Combinatorial Residual Network",
   "upload_type": "software",
   "description": "Reference implementation of CoReNet, a configuration-driven combinatorial residual network for jet assignment and event classification in multijet final states, with the HH to bbbb, HH to bbWW and ttH examples.",
   "creators": [

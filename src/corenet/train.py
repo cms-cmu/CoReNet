@@ -18,16 +18,16 @@ or in the optional ``trainer:`` section of the configuration, see docs/Options.m
   * per-class weight normalisation (``class_norm``): the event weights of every class sum to 1 over
     the training set; weights are clamped at >= 0 inside the loss.
 
-Loss = weighted cross entropy over ``spec.classes`` (0 = rest, 1 = first output, 2 = second, ...) on
-the main logits, plus, for every further output ``o``, ``head_weights.get(o, 1.0)`` times a weighted
+Loss = weighted cross entropy over ``spec.classes`` (0 = rest, 1 = first output, 2 = second, ...; or the
+``labels:`` list of the configuration in label order) on the main logits, plus, for every further output ``o``, ``head_weights.get(o, 1.0)`` times a weighted
 binary cross entropy of its head against ``label == class index of o``. The view (candidate
 selection) scores are not supervised.
 
 Folds: ``EVENT/fold`` of the file (ids exactly 0..K-1), or ``--n-folds K`` for fold = squares(event) % K
 from the event numbers (``corenet.data.folds.fold_of``, seed ``--fold-seed``, 0 = the rule of the
 example files); ``--exclude-folds next`` is the fold (k + 1) % K of held-out fold k. Training needs one
-of the two. ``--early-stop-patience`` needs a validation set with events of class 1 and of another
-class; an empty validation set or a missing validation AUC stops the run with an error.
+of the two. ``--early-stop-patience`` needs a validation set with events of the main class (``spec.main_class``,
+class 1 without ``labels:``) and of another class; an empty validation set or a missing validation AUC stops the run with an error.
 
 For each held-out fold k this writes, in ``--output-dir``:
     model_fold{k}.pkl          checkpoint: state dict, configuration, classes and metadata
@@ -78,6 +78,8 @@ RECIPE_DEFAULTS = {
     "finetune_layers": list(HEAD_PREFIXES),
     "finetune_lr": None,
     "finetune_batch_size": None,
+    "finetune_reset_optimizer": False,
+    "masked_classes": {},
 }
 
 
@@ -155,6 +157,18 @@ def freeze_heads(model: CoReNet, prefixes=HEAD_PREFIXES) -> int:
     return n
 
 
+def _reset_optimizer(model: torch.nn.Module, lr: float, milestones, gamma: float):
+    """(optimizer, scheduler) of a fresh fine-tuning stage: a new Adam over the trainable parameters at
+    learning rate ``lr`` and a new MultiStepLR whose milestones count from the reset."""
+    optimizer = torch.optim.Adam(
+        [p for p in model.parameters() if p.requires_grad], lr=lr
+    )
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer, milestones=list(milestones), gamma=gamma
+    )  # milestones counted from the reset, as a fresh stage would
+    return optimizer, scheduler
+
+
 def count_trainable(model: torch.nn.Module) -> int:
     return int(sum(p.numel() for p in model.parameters() if p.requires_grad))
 
@@ -176,6 +190,47 @@ def parse_finetune_layers(value) -> list[str]:
     return list(value)
 
 
+def parse_masked_classes(entries: list[str]) -> dict[str, list[str]]:
+    """``--masked-classes FLAG=CLASS[,CLASS...] ...`` as the ``masked_classes`` mapping."""
+    out: dict[str, list[str]] = {}
+    for entry in entries:
+        flag, sep, classes = entry.partition("=")
+        names = classes.split(",")
+        if not sep or not flag or not all(names):
+            raise ConfigError(
+                f"--masked-classes: expected FLAG=CLASS[,CLASS...], got {entry!r}"
+            )
+        if flag in out:
+            raise ConfigError(f"--masked-classes: flag {flag!r} given twice")
+        out[flag] = names
+    return out
+
+
+def check_masked_classes(masked_classes: dict, spec: NetworkSpec) -> None:
+    """Every masked class is one of ``spec.classes`` and at least one class stays unmasked per flag."""
+    for flag, classes in masked_classes.items():
+        unknown = [c for c in classes if c not in spec.classes]
+        if unknown:
+            raise ConfigError(
+                f"trainer.masked_classes.{flag}: unknown classes {unknown} (classes {spec.classes})"
+            )
+        if len(classes) >= len(spec.classes):
+            raise ConfigError(
+                f"trainer.masked_classes.{flag}: masks every class {spec.classes}; at least one must stay"
+            )
+
+
+def masked_cross_entropy(
+    logits: torch.Tensor, label: torch.Tensor, class_mask: torch.Tensor | None = None
+) -> torch.Tensor:
+    """Per-event cross entropy; ``class_mask`` (events, classes) True removes that class from the
+    event's softmax (its logit is set to -inf: the softmax renormalises over the other classes and the
+    removed logit gets zero gradient)."""
+    if class_mask is not None:
+        logits = logits.masked_fill(class_mask, float("-inf"))
+    return F.cross_entropy(logits, label, reduction="none")
+
+
 def normalize_class_weights(
     labels: np.ndarray, weights: torch.Tensor, idx: np.ndarray, n_classes: int
 ) -> torch.Tensor:
@@ -189,10 +244,12 @@ def normalize_class_weights(
     return w
 
 
-def weighted_auc(label: np.ndarray, score: np.ndarray, weight: np.ndarray) -> float:
-    """ROC AUC (trapezoidal, weighted) of class 1 against everything else, without scikit-learn."""
+def weighted_auc(
+    label: np.ndarray, score: np.ndarray, weight: np.ndarray, positive: int
+) -> float:
+    """ROC AUC (trapezoidal, weighted) of class ``positive`` against everything else, without scikit-learn."""
     order = np.argsort(-score, kind="stable")
-    y, w = label[order] == 1, np.clip(weight[order], 0, None)
+    y, w = label[order] == positive, np.clip(weight[order], 0, None)
     tps, fps = np.cumsum(w * y), np.cumsum(w * ~y)
     if tps[-1] <= 0 or fps[-1] <= 0:
         return float("nan")
@@ -203,8 +260,8 @@ def weighted_auc(label: np.ndarray, score: np.ndarray, weight: np.ndarray) -> fl
 
 
 def aux_targets(spec: NetworkSpec) -> dict[str, int]:
-    """Auxiliary head name -> the class label it discriminates (classes = ['rest'] + outputs)."""
-    return {o.name: i + 1 for i, o in enumerate(spec.outputs) if i > 0}
+    """Auxiliary head name -> the class label it discriminates (its index in ``spec.classes``)."""
+    return {o.name: spec.classes.index(o.name) for o in spec.outputs[1:]}
 
 
 def validation_metrics(
@@ -213,8 +270,13 @@ def validation_metrics(
     val_idx: np.ndarray,
     labels: np.ndarray,
     weights: torch.Tensor,
+    class_mask: np.ndarray | None = None,
 ) -> dict:
-    """Weighted cross entropy and signal-vs-rest AUC on the validation fold(s).
+    """Weighted cross entropy and main-class-vs-rest AUC on the validation fold(s).
+
+    ``class_mask`` (len(val_idx), classes), True = class removed from the event's softmax
+    (``masked_classes``): the loss uses the probabilities with those classes set to 0 and the row
+    renormalised, as the training loss; the AUC uses the full probabilities.
 
     Side-effect free: the torch RNG state is saved and restored so the training stream is identical
     to a run without validation; the caller restores ghost batches.
@@ -227,13 +289,20 @@ def validation_metrics(
         model.train()
     label = labels[val_idx]
     w = np.clip(weights.numpy()[val_idx], 0, None)
-    p = np.clip(probs[np.arange(len(label)), label], 1e-12, None)
+    p_loss = probs
+    if class_mask is not None:
+        rows = class_mask.any(1)
+        p_loss = probs.copy()
+        kept = np.where(class_mask[rows], 0.0, probs[rows])
+        p_loss[rows] = kept / kept.sum(1, keepdims=True)
+    p = np.clip(p_loss[np.arange(len(label)), label], 1e-12, None)
     out = {
         "val_events": len(label),
         "val_loss": float(-(w * np.log(p)).sum() / max(w.sum(), 1e-12)),
     }
-    if 0 < int((label == 1).sum()) < len(label):
-        out["val_auc"] = weighted_auc(label, probs[:, 1], w)
+    main = model.spec.main_class
+    if 0 < int((label == main).sum()) < len(label):
+        out["val_auc"] = weighted_auc(label, probs[:, main], w, main)
     return out
 
 
@@ -244,11 +313,14 @@ def loss_of_batch(
     w: torch.Tensor,
     aux: dict[str, int],
     head_weights: dict[str, float],
+    class_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Weighted CE on the class logits + sum_o head_weight[o] * weighted BCE of the auxiliary heads."""
+    """Weighted CE on the class logits + sum_o head_weight[o] * weighted BCE of the auxiliary heads.
+    ``class_mask``: classes removed from the softmax per event (``masked_cross_entropy``)."""
     out = model(batch)
     w_sum = w.sum()
-    loss = (F.cross_entropy(out["logits"], label, reduction="none") * w).sum() / w_sum
+    logits = out["logits"]
+    loss = (masked_cross_entropy(logits, label, class_mask) * w).sum() / w_sum
     for name, cls in aux.items():
         target = (label == cls).to(out["heads"][name].dtype)
         bce = F.binary_cross_entropy_with_logits(
@@ -302,6 +374,11 @@ def train_fold(
     data = Batches(ds, device)
     w_dev = weights.to(device)
     aux, head_weights = aux_targets(spec), dict(spec.training.head_weights or {})
+    val_class_mask = data.class_mask(
+        torch.as_tensor(val_idx, device=device), args.masked_classes, n_classes
+    )
+    if val_class_mask is not None:
+        val_class_mask = val_class_mask.cpu().numpy()
 
     model.train()
     with torch.no_grad():
@@ -353,6 +430,15 @@ def train_fold(
                 n_trainable = freeze_heads(model, args.finetune_layers)
             else:
                 n_trainable = count_trainable(model)
+            if args.finetune_reset_optimizer:
+                lr_now = (
+                    args.finetune_lr
+                    if args.finetune_lr is not None
+                    else optimizer.param_groups[0]["lr"]
+                )
+                optimizer, scheduler = _reset_optimizer(
+                    model, lr_now, args.lr_milestones, args.lr_gamma
+                )
             if args.finetune_lr is not None:
                 for group in optimizer.param_groups:
                     group["lr"] = args.finetune_lr
@@ -365,6 +451,7 @@ def train_fold(
                 )
                 + f", {n_trainable:,} trainable parameters, lr {optimizer.param_groups[0]['lr']:.2e}, "
                 f"batch size {bs}, {n_gb} ghost batches"
+                + (", optimizer reset" if args.finetune_reset_optimizer else "")
             )
         model.train()
         loss_sum, w_sum = 0.0, 0.0
@@ -373,7 +460,10 @@ def train_fold(
             w = w_dev[sel].clamp(min=0)
             if w.sum() <= 0:
                 continue
-            loss = loss_of_batch(model, batch, data.labels[sel], w, aux, head_weights)
+            class_mask = data.class_mask(sel, args.masked_classes, n_classes)
+            loss = loss_of_batch(
+                model, batch, data.labels[sel], w, aux, head_weights, class_mask
+            )
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -396,7 +486,11 @@ def train_fold(
             "train_loss": loss_sum / max(w_sum, 1e-12),
         }
         if len(val_idx):
-            entry.update(validation_metrics(model, data, val_idx, labels, val_weights))
+            entry.update(
+                validation_metrics(
+                    model, data, val_idx, labels, val_weights, val_class_mask
+                )
+            )
             model.setGhostBatches(n_gb)  # predict() set them to 0
         history.append(entry)
         history_path.write_text(
@@ -436,7 +530,7 @@ def train_fold(
                 raise SystemExit(
                     f"fold {fold}: epoch {epoch}: no validation AUC, so --early-stop-patience cannot be applied: "
                     f"the validation folds {exclude_folds} hold {counts} events (positive-weight events of "
-                    f"class 1 `{spec.classes[1]}` and of another class are needed)"
+                    f"class {spec.main_class} `{spec.classes[spec.main_class]}` and of another class are needed)"
                 )
             if best_auc is None or auc > best_auc:
                 best_auc, best_epoch, bad = auc, epoch, 0
@@ -567,6 +661,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="batch size from --freeze-epoch on [keep the schedule]",
     )
     g.add_argument(
+        "--finetune-reset-optimizer",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="at --freeze-epoch, start a new optimizer and learning-rate schedule over the trainable "
+        "parameters [off]",
+    )
+    g.add_argument(
+        "--masked-classes",
+        nargs="*",
+        metavar="FLAG=CLASS[,CLASS...]",
+        help="classes removed from the softmax for events with EVENT/FLAG true, e.g. SR=d4; "
+        "overrides the trainer section",
+    )
+    g.add_argument(
         "--lr", type=float, help=f"Adam learning rate [{RECIPE_DEFAULTS['lr']}]"
     )
     g.add_argument(
@@ -646,6 +754,19 @@ def _check_recipe(r: dict) -> None:
     def is_num(x):
         return isinstance(x, (int, float)) and not isinstance(x, bool)
 
+    def is_masked_classes(x):
+        if not isinstance(x, dict):
+            return False
+        return all(
+            isinstance(k, str)
+            and k
+            and isinstance(v, list)
+            and v
+            and all(isinstance(c, str) for c in v)
+            and len(set(v)) == len(v)
+            for k, v in x.items()
+        )
+
     rules = {
         "epochs": (lambda x: is_int(x) and x >= 1, "an integer >= 1"),
         "freeze_epoch": (lambda x: is_int(x) and x >= 0, "an integer >= 0"),
@@ -669,14 +790,20 @@ def _check_recipe(r: dict) -> None:
             lambda x: x is None or (is_int(x) and x >= 1),
             "an integer >= 1",
         ),
+        "finetune_reset_optimizer": (lambda x: isinstance(x, bool), "true or false"),
+        "masked_classes": (
+            is_masked_classes,
+            "a mapping flag name -> non-empty list of distinct class names",
+        ),
     }
     for key, (ok, what) in rules.items():
         if key in r and not ok(r[key]):
             raise ConfigError(f"trainer.{key} must be {what}, got {r[key]!r}")
 
 
-def resolve_recipe(args, config: dict):
-    """Fill the recipe options of ``args``: command line > ``trainer:`` section > built-in default."""
+def resolve_recipe(args, config: dict, spec: NetworkSpec | None = None):
+    """Fill the recipe options of ``args``: command line > ``trainer:`` section > built-in default.
+    With ``spec``, the class names of ``masked_classes`` are checked against ``spec.classes``."""
     section = config.get("trainer", {}) or {}
     if not isinstance(section, dict):
         raise ConfigError("trainer must be a mapping")
@@ -685,11 +812,15 @@ def resolve_recipe(args, config: dict):
         raise ConfigError(
             f"trainer: unknown keys {sorted(unknown)} (known: {', '.join(RECIPE_DEFAULTS)})"
         )
+    if args.masked_classes is not None:  # command line: FLAG=CLASS[,CLASS...]
+        args.masked_classes = parse_masked_classes(args.masked_classes)
     for key, default in RECIPE_DEFAULTS.items():
         if getattr(args, key) is None:
             setattr(args, key, section.get(key, default))
     args.finetune_layers = parse_finetune_layers(args.finetune_layers)
     _check_recipe({k: getattr(args, k) for k in RECIPE_DEFAULTS})
+    if spec is not None:
+        check_masked_classes(args.masked_classes, spec)
     return args
 
 
@@ -700,7 +831,7 @@ def main(argv=None):
     )
     config = read_config_dict(args.config)
     spec = parse_config(config)
-    resolve_recipe(args, config)
+    resolve_recipe(args, config, spec)
     if args.early_stop_patience and not args.exclude_folds:
         build_parser().error(
             "--early-stop-patience needs a validation fold: pass --exclude-folds"
@@ -718,6 +849,7 @@ def main(argv=None):
         rest_order=args.rest_order,
         n_folds=args.n_folds,
         fold_seed=args.fold_seed,
+        masked_classes=args.masked_classes,
     )
     if not ds.has_folds:
         raise SystemExit(

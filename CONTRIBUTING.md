@@ -14,19 +14,9 @@ cd CoReNet
 
 ### 2. Environment Setup
 
-#### Option A: Using Pixi (Recommended on Linux with CUDA GPU)
 ```bash
 pixi install
 pixi shell
-```
-
-#### Option B: Using Pip / Virtual Environment (CPU / Local Dev)
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-pip install -e ".[test,export,lint]"
 ```
 
 ---
@@ -67,6 +57,36 @@ To run with test coverage:
 ```bash
 pytest --cov=corenet tests/
 ```
+
+### Parity with the research code
+
+```bash
+CORENET_REFERENCE_REPO=/path/to/research-checkout pytest tests/reference -s
+```
+
+- `CORENET_REFERENCE_REPO`: checkout of the research repository; its `src/hcr` is imported, `data/h5/{hh4b,bbww}_all.h5` and the checkpoints under `models/` are read. Without it these tests are skipped.
+
+The tests require identical configurations, parameter counts, initial weights, loader tensors, eval-mode outputs and checkpoint evaluation. Training-mode outputs are not compared with the research code, because CoReNet embeds the slots of one leaf role in one node together (they share the ghost-batch statistics); the golden-file test below covers them.
+
+### Golden files of the training-mode numerics
+
+`pytest tests` runs `tests/test_training_regression.py`: training-mode outputs, first-step gradients, five SGD steps and the eval-mode outputs after them, on 1,024 events of `examples/data/{hh4b,bbww}_small.h5`, on the CPU with one thread, compared with `tests/golden/{hh4b,bbww}.npz`.
+
+After an intentional change of the training-mode numerics, or of `examples/data/{hh4b,bbww}_small.h5`:
+
+1. Regenerate the golden files:
+   ```bash
+   python scripts/make_golden.py
+   ```
+   - `hh4b` or `bbww`: regenerate this case only (default: both)
+2. Read the printed change per stage against the old files and the two noise probes. The script writes nothing if a probe exceeds a tenth of the test tolerance or the files exceed 2 MB.
+3. Run `pytest tests/test_training_regression.py`.
+4. Commit `tests/golden/*.npz` in the same commit as the change and give the reason in the commit message.
+
+| file | content |
+|---|---|
+| `tests/golden/hh4b.npz` | HH → 4b: initial weights, frozen input statistics, training-mode outputs, first-step gradients, losses, weights after five SGD steps, eval-mode outputs |
+| `tests/golden/bbww.npz` | the same for HH → bbWW |
 
 ---
 

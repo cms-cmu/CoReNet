@@ -20,5 +20,5 @@ authors:
     given-names: "Alejandro"
     orcid: "https://orcid.org/0000-0002-9443-7769"
     affiliation: "Carnegie Mellon University"
-# doi: "10.xxxx/zenodo.xxxxxxx"         # to be confirmed
+doi: "10.5281/zenodo.23577720"
 # preferred-citation:                   # to be confirmed (article describing the architecture)

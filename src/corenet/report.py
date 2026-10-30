@@ -725,11 +725,12 @@ class Report:
 
     # ---- classification
     def _main_curves(self):
-        """{split: [(fold, fpr, tpr, auc)]} of the main score (class 1 against the rest)."""
+        """{split: [(fold, fpr, tpr, auc)]} of the main score (the main class against the rest)."""
+        m = self.spec.main_class
         out = {}
         for name in SPLITS:
             for fd, s in self.splits_of(name):
-                y, sc, w = s.label == 1, s.probs[:, 1], np.clip(s.weight, 0, None)
+                y, sc, w = s.label == m, s.probs[:, m], np.clip(s.weight, 0, None)
                 if y.all() or not y.any():
                     continue
                 f, t = roc_points(y, sc, w)
@@ -793,7 +794,7 @@ class Report:
             parts.append(
                 figure(
                     fig,
-                    f"ROC of the main score P({self.classes[1]}) (class 1 against every other class, weighted): thin lines are the test folds, thick lines the mean over folds with the ± 1 sd band; dashed = training folds, dash-dotted = validation fold, where predictions exist.",
+                    f"ROC of the main score P({self.classes[self.spec.main_class]}) (class {self.spec.main_class} against every other class, weighted): thin lines are the test folds, thick lines the mean over folds with the ± 1 sd band; dashed = training folds, dash-dotted = validation fold, where predictions exist.",
                 )
             )
             # AUC table
@@ -837,18 +838,19 @@ class Report:
         if not test:
             return ""
         bins = np.linspace(0, 1, 41)
+        m = self.spec.main_class
         fig, (a, b) = plt.subplots(1, 2, figsize=(7.8, 3.2))
         for name in ("test", "train"):
             sp = self.splits_of(name)
             if not sp:
                 continue
             lab = np.concatenate([s.label for _, s in sp])
-            sc = np.concatenate([s.probs[:, 1] for _, s in sp])
+            sc = np.concatenate([s.probs[:, m] for _, s in sp])
             w = np.concatenate([s.weight for _, s in sp])
             series = self.class_series(sc, lab, w, {"ls": SPLIT_STYLE[name]})
             series = [(f"{c} ({name})", v, ww, st) for c, v, ww, st in series]
-            hist_panel(a, series, bins, f"P({self.classes[1]})")
-            hist_panel(b, series, bins, f"P({self.classes[1]})", logy=True)
+            hist_panel(a, series, bins, f"P({self.classes[m]})")
+            hist_panel(b, series, bins, f"P({self.classes[m]})", logy=True)
         a.legend(frameon=False)
         a.set_title("(a) linear", loc="left")
         b.set_title("(b) log", loc="left")

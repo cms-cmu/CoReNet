@@ -75,7 +75,7 @@ training:
   attention_gate: true
   kv_projection: true
   phase_symmetric: true
-  reflect_eta: false
+  reflect_eta: true        # use the forward-backward symmetry of the detector
 ```
 
 ### `objects`
@@ -116,7 +116,7 @@ One output, `signal: ttH`, hence two classes: 0 = rest (semileptonic tt̄), 1 = 
 
 ### `training`
 
-All network settings at their defaults except `reflect_eta: false`. [Options.md](./Options.md)
+All network settings at their defaults. [Options.md](./Options.md)
 describes every setting.
 
 ## Training, evaluation and export

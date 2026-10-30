@@ -36,6 +36,8 @@ trainer:
   lr_gamma: 0.25
   batch_size_init: 1024    # epoch-0 batch size; doubled at epochs 1, 3, 6 and 10 (fixed schedule)
   freeze_epoch: 15         # from this epoch on only the output layers are trained
+  finetune_reset_optimizer: false   # true: new optimizer and lr schedule at freeze_epoch
   class_norm: true         # normalise the event weights of every class to 1 over the training set
   seed: 42                 # random seed; the seed of fold k is seed + k
   rest_order: pt           # order of the jets taken by a `rest` line: pt | selector
+  masked_classes: {}       # flag -> classes removed from the softmax for the flagged events, e.g. {SR: [d4]}
