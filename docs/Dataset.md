@@ -84,6 +84,10 @@ A collection named `x` is read from `INPUTS/x`, matched case-insensitively, or f
   `(k + 1) % n_folds`). Only selecting a fold needs the folds: `corenet-evaluate --fold -1` and
   `corenet-export` also work on a file with neither `EVENT/fold` nor `--n-folds` (the events then
   carry fold -1 in the prediction file).
+* **Flags.** Boolean columns `EVENT/<name>` named by `masked_classes` ([Options.md](./Options.md)) mark
+  the events whose listed classes are removed from the softmax in training. They are boolean, or
+  integers 0/1. No flagged event may carry one of the classes masked for its flag: `corenet-train`
+  and `corenet-validate` reject such a file and give the number of offending events per flag and class.
 * **Event identifier.** `EVENT/event` is copied to the prediction files and is the input of the
   `squares(event) % n_folds` rule.
 

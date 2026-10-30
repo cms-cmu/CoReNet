@@ -48,7 +48,23 @@ class Batches:
     def __init__(self, ds: H5Dataset, device):
         self.inputs = {k: v.to(device) for k, v in ds.inputs.items()}
         self.labels = ds.labels.to(device)
+        self.flags = {k: v.to(device) for k, v in ds.flags.items()}
+        self.classes = list(ds.spec.classes)
         self.device = device
+
+    def class_mask(
+        self, sel: torch.Tensor, masked_classes: dict, n_classes: int
+    ) -> torch.Tensor | None:
+        """(len(sel), n_classes) bool, True where the class is removed from the event's softmax
+        (``masked_classes``: flag -> class names, for the events with that flag true); None when empty."""
+        if not masked_classes:
+            return None
+        mask = torch.zeros((len(sel), n_classes), dtype=torch.bool, device=self.device)
+        for flag, classes in masked_classes.items():
+            rows = self.flags[flag][sel]
+            for c in classes:
+                mask[rows, self.classes.index(c)] = True
+        return mask
 
     def slice(self, idx: np.ndarray) -> dict[str, torch.Tensor]:
         sel = torch.as_tensor(idx, device=self.device)

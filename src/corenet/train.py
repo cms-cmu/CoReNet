@@ -79,6 +79,7 @@ RECIPE_DEFAULTS = {
     "finetune_lr": None,
     "finetune_batch_size": None,
     "finetune_reset_optimizer": False,
+    "masked_classes": {},
 }
 
 
@@ -189,6 +190,47 @@ def parse_finetune_layers(value) -> list[str]:
     return list(value)
 
 
+def parse_masked_classes(entries: list[str]) -> dict[str, list[str]]:
+    """``--masked-classes FLAG=CLASS[,CLASS...] ...`` as the ``masked_classes`` mapping."""
+    out: dict[str, list[str]] = {}
+    for entry in entries:
+        flag, sep, classes = entry.partition("=")
+        names = classes.split(",")
+        if not sep or not flag or not all(names):
+            raise ConfigError(
+                f"--masked-classes: expected FLAG=CLASS[,CLASS...], got {entry!r}"
+            )
+        if flag in out:
+            raise ConfigError(f"--masked-classes: flag {flag!r} given twice")
+        out[flag] = names
+    return out
+
+
+def check_masked_classes(masked_classes: dict, spec: NetworkSpec) -> None:
+    """Every masked class is one of ``spec.classes`` and at least one class stays unmasked per flag."""
+    for flag, classes in masked_classes.items():
+        unknown = [c for c in classes if c not in spec.classes]
+        if unknown:
+            raise ConfigError(
+                f"trainer.masked_classes.{flag}: unknown classes {unknown} (classes {spec.classes})"
+            )
+        if len(classes) >= len(spec.classes):
+            raise ConfigError(
+                f"trainer.masked_classes.{flag}: masks every class {spec.classes}; at least one must stay"
+            )
+
+
+def masked_cross_entropy(
+    logits: torch.Tensor, label: torch.Tensor, class_mask: torch.Tensor | None = None
+) -> torch.Tensor:
+    """Per-event cross entropy; ``class_mask`` (events, classes) True removes that class from the
+    event's softmax (its logit is set to -inf: the softmax renormalises over the other classes and the
+    removed logit gets zero gradient)."""
+    if class_mask is not None:
+        logits = logits.masked_fill(class_mask, float("-inf"))
+    return F.cross_entropy(logits, label, reduction="none")
+
+
 def normalize_class_weights(
     labels: np.ndarray, weights: torch.Tensor, idx: np.ndarray, n_classes: int
 ) -> torch.Tensor:
@@ -228,8 +270,13 @@ def validation_metrics(
     val_idx: np.ndarray,
     labels: np.ndarray,
     weights: torch.Tensor,
+    class_mask: np.ndarray | None = None,
 ) -> dict:
     """Weighted cross entropy and main-class-vs-rest AUC on the validation fold(s).
+
+    ``class_mask`` (len(val_idx), classes), True = class removed from the event's softmax
+    (``masked_classes``): the loss uses the probabilities with those classes set to 0 and the row
+    renormalised, as the training loss; the AUC uses the full probabilities.
 
     Side-effect free: the torch RNG state is saved and restored so the training stream is identical
     to a run without validation; the caller restores ghost batches.
@@ -242,7 +289,13 @@ def validation_metrics(
         model.train()
     label = labels[val_idx]
     w = np.clip(weights.numpy()[val_idx], 0, None)
-    p = np.clip(probs[np.arange(len(label)), label], 1e-12, None)
+    p_loss = probs
+    if class_mask is not None:
+        rows = class_mask.any(1)
+        p_loss = probs.copy()
+        kept = np.where(class_mask[rows], 0.0, probs[rows])
+        p_loss[rows] = kept / kept.sum(1, keepdims=True)
+    p = np.clip(p_loss[np.arange(len(label)), label], 1e-12, None)
     out = {
         "val_events": len(label),
         "val_loss": float(-(w * np.log(p)).sum() / max(w.sum(), 1e-12)),
@@ -260,11 +313,14 @@ def loss_of_batch(
     w: torch.Tensor,
     aux: dict[str, int],
     head_weights: dict[str, float],
+    class_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Weighted CE on the class logits + sum_o head_weight[o] * weighted BCE of the auxiliary heads."""
+    """Weighted CE on the class logits + sum_o head_weight[o] * weighted BCE of the auxiliary heads.
+    ``class_mask``: classes removed from the softmax per event (``masked_cross_entropy``)."""
     out = model(batch)
     w_sum = w.sum()
-    loss = (F.cross_entropy(out["logits"], label, reduction="none") * w).sum() / w_sum
+    logits = out["logits"]
+    loss = (masked_cross_entropy(logits, label, class_mask) * w).sum() / w_sum
     for name, cls in aux.items():
         target = (label == cls).to(out["heads"][name].dtype)
         bce = F.binary_cross_entropy_with_logits(
@@ -318,6 +374,11 @@ def train_fold(
     data = Batches(ds, device)
     w_dev = weights.to(device)
     aux, head_weights = aux_targets(spec), dict(spec.training.head_weights or {})
+    val_class_mask = data.class_mask(
+        torch.as_tensor(val_idx, device=device), args.masked_classes, n_classes
+    )
+    if val_class_mask is not None:
+        val_class_mask = val_class_mask.cpu().numpy()
 
     model.train()
     with torch.no_grad():
@@ -399,7 +460,10 @@ def train_fold(
             w = w_dev[sel].clamp(min=0)
             if w.sum() <= 0:
                 continue
-            loss = loss_of_batch(model, batch, data.labels[sel], w, aux, head_weights)
+            class_mask = data.class_mask(sel, args.masked_classes, n_classes)
+            loss = loss_of_batch(
+                model, batch, data.labels[sel], w, aux, head_weights, class_mask
+            )
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -422,7 +486,11 @@ def train_fold(
             "train_loss": loss_sum / max(w_sum, 1e-12),
         }
         if len(val_idx):
-            entry.update(validation_metrics(model, data, val_idx, labels, val_weights))
+            entry.update(
+                validation_metrics(
+                    model, data, val_idx, labels, val_weights, val_class_mask
+                )
+            )
             model.setGhostBatches(n_gb)  # predict() set them to 0
         history.append(entry)
         history_path.write_text(
@@ -600,6 +668,13 @@ def build_parser() -> argparse.ArgumentParser:
         "parameters [off]",
     )
     g.add_argument(
+        "--masked-classes",
+        nargs="*",
+        metavar="FLAG=CLASS[,CLASS...]",
+        help="classes removed from the softmax for events with EVENT/FLAG true, e.g. SR=d4; "
+        "overrides the trainer section",
+    )
+    g.add_argument(
         "--lr", type=float, help=f"Adam learning rate [{RECIPE_DEFAULTS['lr']}]"
     )
     g.add_argument(
@@ -679,6 +754,19 @@ def _check_recipe(r: dict) -> None:
     def is_num(x):
         return isinstance(x, (int, float)) and not isinstance(x, bool)
 
+    def is_masked_classes(x):
+        if not isinstance(x, dict):
+            return False
+        return all(
+            isinstance(k, str)
+            and k
+            and isinstance(v, list)
+            and v
+            and all(isinstance(c, str) for c in v)
+            and len(set(v)) == len(v)
+            for k, v in x.items()
+        )
+
     rules = {
         "epochs": (lambda x: is_int(x) and x >= 1, "an integer >= 1"),
         "freeze_epoch": (lambda x: is_int(x) and x >= 0, "an integer >= 0"),
@@ -703,14 +791,19 @@ def _check_recipe(r: dict) -> None:
             "an integer >= 1",
         ),
         "finetune_reset_optimizer": (lambda x: isinstance(x, bool), "true or false"),
+        "masked_classes": (
+            is_masked_classes,
+            "a mapping flag name -> non-empty list of distinct class names",
+        ),
     }
     for key, (ok, what) in rules.items():
         if key in r and not ok(r[key]):
             raise ConfigError(f"trainer.{key} must be {what}, got {r[key]!r}")
 
 
-def resolve_recipe(args, config: dict):
-    """Fill the recipe options of ``args``: command line > ``trainer:`` section > built-in default."""
+def resolve_recipe(args, config: dict, spec: NetworkSpec | None = None):
+    """Fill the recipe options of ``args``: command line > ``trainer:`` section > built-in default.
+    With ``spec``, the class names of ``masked_classes`` are checked against ``spec.classes``."""
     section = config.get("trainer", {}) or {}
     if not isinstance(section, dict):
         raise ConfigError("trainer must be a mapping")
@@ -719,11 +812,15 @@ def resolve_recipe(args, config: dict):
         raise ConfigError(
             f"trainer: unknown keys {sorted(unknown)} (known: {', '.join(RECIPE_DEFAULTS)})"
         )
+    if args.masked_classes is not None:  # command line: FLAG=CLASS[,CLASS...]
+        args.masked_classes = parse_masked_classes(args.masked_classes)
     for key, default in RECIPE_DEFAULTS.items():
         if getattr(args, key) is None:
             setattr(args, key, section.get(key, default))
     args.finetune_layers = parse_finetune_layers(args.finetune_layers)
     _check_recipe({k: getattr(args, k) for k in RECIPE_DEFAULTS})
+    if spec is not None:
+        check_masked_classes(args.masked_classes, spec)
     return args
 
 
@@ -734,7 +831,7 @@ def main(argv=None):
     )
     config = read_config_dict(args.config)
     spec = parse_config(config)
-    resolve_recipe(args, config)
+    resolve_recipe(args, config, spec)
     if args.early_stop_patience and not args.exclude_folds:
         build_parser().error(
             "--early-stop-patience needs a validation fold: pass --exclude-folds"
@@ -752,6 +849,7 @@ def main(argv=None):
         rest_order=args.rest_order,
         n_folds=args.n_folds,
         fold_seed=args.fold_seed,
+        masked_classes=args.masked_classes,
     )
     if not ds.has_folds:
         raise SystemExit(

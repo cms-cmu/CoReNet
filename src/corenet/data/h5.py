@@ -75,6 +75,7 @@ FOLD_RULE_EVENT, FOLD_RULE_COLUMN, FOLD_RULE_NONE = (
     "none",
 )  # H5Dataset.fold_rule; "none": the file has no EVENT/fold and no n_folds was given
 NO_FOLD = -1  # the fold of every event of a file loaded without folds
+FLAG_GROUP = "EVENT"  # flag columns of masked_classes: EVENT/<name>
 
 
 # ------------------------------------------------------------------ what the loader reads (shared with corenet-validate)
@@ -116,6 +117,76 @@ def resolve_group(f: h5py.File, name: str) -> str:
         f"collection {name!r}: no INPUTS group named {name!r} "
         f"or {list(GROUP_ALIASES.get(name.lower(), ()))} in the file (has {sorted(available.values())})"
     )
+
+
+def read_flag(f: h5py.File, name: str, n: int | None = None) -> np.ndarray:
+    """The boolean event column ``EVENT/<name>`` (a flag of ``masked_classes``): boolean, or integer
+    0/1 (cast). KeyError when missing, ValueError for another dtype, shape or length."""
+    key = f"{FLAG_GROUP}/{name}"
+    where = Path(f.filename).name
+    if key not in f:
+        raise KeyError(
+            f"{where}: no {key} dataset (flag column named by masked_classes)"
+        )
+    a = f[key][...]
+    if a.ndim != 1 or (n is not None and len(a) != n):
+        raise ValueError(
+            f"{where}: {key} has shape {a.shape}; a flag column must hold one value per event"
+            + (f" ({n})" if n is not None else "")
+        )
+    if a.dtype.kind == "b":
+        return a.astype(bool)
+    if a.dtype.kind in "iu" and np.isin(a, (0, 1)).all():
+        return a.astype(bool)
+    raise ValueError(
+        f"{where}: {key} has dtype {a.dtype}"
+        + (" with values other than 0/1" if a.dtype.kind in "iu" else "")
+        + "; a flag column must be boolean or integer 0/1"
+    )
+
+
+def masked_label_problems(
+    flags: dict[str, np.ndarray],
+    labels: np.ndarray,
+    spec: NetworkSpec,
+    masked_classes: dict,
+) -> list[str]:
+    """One message per (flag, excluded class) with flagged events of that class: such an event would
+    have its own class removed from the softmax (a blinding or configuration error)."""
+    problems = []
+    for flag, classes in masked_classes.items():
+        for c in classes:
+            i = spec.classes.index(c)
+            n_bad = int((flags[flag] & (labels == i)).sum())
+            if n_bad:
+                problems.append(
+                    f"masked_classes: {n_bad:,} events with {FLAG_GROUP}/{flag} true carry the excluded "
+                    f"class `{c}` (label {i}); events of an excluded class must not be flagged"
+                )
+    return problems
+
+
+def check_masked_classes(
+    f: h5py.File, spec: NetworkSpec, masked_classes: dict
+) -> list[str]:
+    """Problems of a file for ``masked_classes`` (empty list: none): every flag column exists and is
+    boolean or 0/1 (``read_flag``), and no flagged event carries one of its excluded classes."""
+    key = next((k for k in LABEL_KEYS if k in f), None)
+    labels = f[key][...].astype(np.int64) if key else None
+    problems, flags = [], {}
+    for flag in masked_classes:
+        try:
+            flags[flag] = read_flag(
+                f, flag, len(labels) if labels is not None else None
+            )
+        except (KeyError, ValueError) as e:
+            problems.append(str(e.args[0]))
+    if problems:
+        return problems
+    if labels is None:  # the loader gives every event label 0
+        n = len(next(iter(flags.values()))) if flags else 0
+        labels = np.zeros(n, dtype=np.int64)
+    return masked_label_problems(flags, labels, spec, masked_classes)
 
 
 def _sortable(a: np.ndarray) -> np.ndarray:
@@ -184,9 +255,14 @@ class H5Dataset(Dataset):
         rest_order: str = "pt",
         n_folds: int | None = None,
         fold_seed: int = FOLD_SEED,
+        flags: list[str] | None = None,
+        masked_classes: dict | None = None,
     ):
         """``n_folds``: use fold = squares(event) % n_folds (``fold_of``, seed ``fold_seed``) instead of the
-        ``EVENT/fold`` column. Without both, the file loads without folds (``has_folds`` is False)."""
+        ``EVENT/fold`` column. Without both, the file loads without folds (``has_folds`` is False).
+        ``flags``: boolean event columns ``EVENT/<name>`` read into ``self.flags`` (default: the flags of
+        ``masked_classes``); ``masked_classes`` (flag -> class names): a flagged event of an excluded class
+        raises ValueError."""
         if rest_order not in ("pt", "selector"):
             raise ValueError(
                 f"rest_order must be 'pt' or 'selector', got {rest_order!r}"
@@ -235,6 +311,19 @@ class H5Dataset(Dataset):
             )
             self.fold_seed = int(fold_seed)
             self.folds, self.n_folds, self.fold_rule = self._folds(f, n_folds, n)
+            masked_classes = masked_classes or {}
+            names = list(dict.fromkeys([*(flags or []), *masked_classes]))
+            self.flags: dict[str, torch.Tensor] = {
+                k: torch.from_numpy(read_flag(f, k, n)) for k in names
+            }
+        problems = masked_label_problems(
+            {k: v.numpy() for k, v in self.flags.items()},
+            self.labels.numpy(),
+            spec,
+            masked_classes,
+        )
+        if problems:
+            raise ValueError(f"{self.path.name}: " + "; ".join(problems))
         self.inputs = inputs
 
     @property
@@ -375,6 +464,7 @@ class H5Dataset(Dataset):
             "label": self.labels[idx],
             "weight": self.weights[idx],
             "fold": self.folds[idx],
+            "flags": {k: v[idx] for k, v in self.flags.items()},
         }
 
     def fold_indices(self, fold: int) -> tuple[np.ndarray, np.ndarray]:
@@ -396,10 +486,13 @@ __all__ = [
     "NO_FOLD",
     "WEIGHT_KEY",
     "H5Dataset",
+    "check_masked_classes",
     "columns_to_read",
     "event_source",
     "fold_of",
     "group_candidates",
+    "masked_label_problems",
+    "read_flag",
     "resolve_group",
     "used_collections",
 ]

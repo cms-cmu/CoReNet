@@ -108,7 +108,9 @@ def check_config(path, report: Report) -> NetworkSpec | None:
         from .train import build_parser, resolve_recipe
 
         args = resolve_recipe(
-            build_parser().parse_args(["--config", str(path), "--input", "-"]), cfg
+            build_parser().parse_args(["--config", str(path), "--input", "-"]),
+            cfg,
+            spec,
         )
         if cfg.get("trainer"):
             report.ok(
@@ -181,6 +183,7 @@ def check_data(
     n_forward: int = 512,
     n_folds: int | None = None,
     fold_seed: int = FOLD_SEED,
+    masked_classes: dict | None = None,
 ) -> None:
     sec = f"data {path}"
     try:
@@ -375,6 +378,18 @@ def check_data(
                         report.warn(
                             sec, f"class `{c}` (label {i}) has no events in this file"
                         )
+        if masked_classes:
+            problems = loader.check_masked_classes(f, spec, masked_classes)
+            for p in problems:
+                report.fail(sec, p)
+            if not problems:
+                for flag, classes in masked_classes.items():
+                    n_flag = int(loader.read_flag(f, flag).sum())
+                    report.ok(
+                        sec,
+                        f"masked_classes: {loader.FLAG_GROUP}/{flag} boolean, {n_flag:,} flagged events, "
+                        f"none of the excluded classes {classes}",
+                    )
         if loader.WEIGHT_KEY not in f:
             report.warn(
                 sec, f"{loader.WEIGHT_KEY} not found: every event gets weight 1"
@@ -481,7 +496,12 @@ def check_data(
     # ---- the actual loader and a forward pass
     try:
         ds = loader.H5Dataset(
-            path, spec, rest_order=rest_order, n_folds=n_folds, fold_seed=fold_seed
+            path,
+            spec,
+            rest_order=rest_order,
+            n_folds=n_folds,
+            fold_seed=fold_seed,
+            masked_classes=masked_classes,
         )
     except Exception as e:
         report.fail(sec, f"the loader (H5Dataset) fails: {type(e).__name__}: {e}")
@@ -583,6 +603,14 @@ def validate(
                 )
             except Exception:
                 rest_order = "pt"
+        try:  # an invalid masked_classes is already reported by check_config
+            from .train import check_masked_classes
+
+            trainer = read_config_dict(config).get("trainer") or {}
+            masked_classes = trainer.get("masked_classes") or {}
+            check_masked_classes(masked_classes, spec)
+        except Exception:
+            masked_classes = {}
         check_data(
             data,
             spec,
@@ -590,6 +618,7 @@ def validate(
             rest_order=rest_order,
             n_folds=n_folds,
             fold_seed=fold_seed,
+            masked_classes=masked_classes,
         )
     elif data is not None:
         report.fail(f"data {data}", "not checked: the configuration is invalid")

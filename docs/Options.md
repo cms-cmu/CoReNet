@@ -36,10 +36,24 @@ Changing one of these gives a different network: validate the file with `corenet
 | `finetune_lr` | `--finetune-lr` | unset | learning rate set at `freeze_epoch`; the `lr_milestones` after it multiply this value by `lr_gamma`; unset keeps the schedule |
 | `finetune_batch_size` | `--finetune-batch-size` | unset | batch size from `freeze_epoch` on; the ghost batches of the stage are kept when they divide it, else the largest smaller number that does, so that every ghost batch has at least 8 events; unset keeps the schedule |
 | `finetune_reset_optimizer` | `--finetune-reset-optimizer` / `--no-finetune-reset-optimizer` | off | at freeze_epoch, start a new optimizer and learning-rate schedule over the trainable parameters (a fresh fine-tuning stage) instead of continuing the main stage's optimizer |
+| `masked_classes` | `--masked-classes FLAG=CLASS[,CLASS]` | none | classes removed from the softmax for the events flagged by `EVENT/FLAG`; the flagged events still train the other classes; the file must hold no flagged event of an excluded class |
 | `class_norm` | `--class-norm` / `--no-class-norm` | true | give every class the same total weight in training |
 | `seed` | `--seed` | 42 | random seed; fold `k` uses `seed + k` |
 | `early_stop_patience` | `--early-stop-patience` | 0 | stop when the validation AUC (on the `--exclude-folds` fold) has not improved for this many epochs, and keep the weights of the best epoch; 0 trains every epoch. The validation fold must differ from the held-out fold and hold events of the main class (the class of the first output; class 1 without `labels:`) and of another class, otherwise the run stops with an error |
 | `rest_order` | `--rest-order` | `pt` | order of the jets taken by a `rest` line: `pt`, or `selector` to keep the order of the previous candidate line on the same collection (e.g. `b: jets btag 4`) |
+
+`masked_classes` serves a training with a blinded region. Example: a classifier of the classes
+`d3`, `d4` and `ttbar` is trained with the 4-tag data of the signal region left out of the file. The
+3-tag data and the tt̄ events of the signal region are kept and flagged by `EVENT/SR`; with
+
+```yaml
+trainer:
+  masked_classes:
+    SR: [d4]        # for events with EVENT/SR true, the d4 class is removed from the softmax
+```
+
+these events train the network to tell `d3` from `ttbar` only, and no event of the signal region
+pulls the `d4` score. `corenet-evaluate` and the prediction files always use all classes.
 
 Write floating-point numbers with a decimal point (`0.005` or `5.0e-3`): YAML reads `5e-3` as a string,
 which the validation rejects.

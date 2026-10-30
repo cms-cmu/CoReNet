@@ -56,3 +56,4 @@ trainer:
   class_norm: true         # normalise the event weights of every class to 1 over the training set
   seed: 42                 # random seed; the seed of fold k is seed + k
   rest_order: pt           # order of the jets taken by a `rest` line: pt | selector
+  masked_classes: {}       # flag -> classes removed from the softmax for the flagged events, e.g. {SR: [d4]}

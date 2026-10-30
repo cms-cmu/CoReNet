@@ -151,6 +151,8 @@ corenet-train --config examples/bbww/bbww.yaml --input examples/data/bbww_all.h5
   (default: the output layers; `none` freezes nothing) are trained, at this learning rate and batch size
   (default: the schedule continues); `--finetune-reset-optimizer` starts a new optimizer and learning-rate
   schedule at that epoch instead of continuing the main stage's.
+* `--masked-classes SR=d4`: for the events with `EVENT/SR` true, remove the class `d4` from the
+  softmax in training (a blinded signal region); the evaluation uses all classes ([docs/Options.md](docs/Options.md)).
 * `--epochs`, `--lr`, `--seed`, ...: override the training settings of the configuration file.
   See [docs/Options.md](docs/Options.md) or `corenet-train --help`.
 
