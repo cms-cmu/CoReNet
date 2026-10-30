@@ -75,6 +75,7 @@ training:
   attention_gate: true
   kv_projection: true
   phase_symmetric: true
+  reflect_eta: true        # use the forward-backward symmetry of the detector
 ```
 
 ### `objects`
