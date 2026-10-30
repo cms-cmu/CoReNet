@@ -14,19 +14,9 @@ cd CoReNet
 
 ### 2. Environment Setup
 
-#### Option A: Using Pixi (Recommended on Linux with CUDA GPU)
 ```bash
 pixi install
 pixi shell
-```
-
-#### Option B: Using Pip / Virtual Environment (CPU / Local Dev)
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-pip install -e ".[test,export,lint]"
 ```
 
 ---

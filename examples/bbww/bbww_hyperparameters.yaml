@@ -1,6 +1,6 @@
-# The HH -> bbWW network of bbww.yaml with EVERY tunable option written out at its default value
-# (except reflect_eta, which this example switches off). Training with this file gives the same
-# result as with bbww.yaml. Copy it and edit the values. Reference: docs/Options.md.
+# The HH -> bbWW network of bbww.yaml with EVERY tunable option written out at its default value.
+# Training with this file gives the same result as with bbww.yaml. Copy it and edit the values.
+# Reference: docs/Options.md.
 objects:
   jets:   {features: [pt, eta, phi, mass], max: 12}
   b:      jets btag 2
@@ -41,7 +41,7 @@ training:
   attention_gate: true     # gated comparison of candidates
   kv_projection: true      # reduced-size projections when candidates are compared
   phase_symmetric: true    # phase-symmetric layers
-  reflect_eta: false       # (default true) use the forward-backward symmetry of the detector
+  reflect_eta: true        # use the forward-backward symmetry of the detector
   head_weights: {ttbar: 1.0}   # loss weight of the extra ttbar score (default 1.0)
 
 # ---- training settings (read by corenet-train; a command-line flag overrides the value here)

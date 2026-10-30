@@ -65,7 +65,6 @@ training:
   attention_gate: true
   kv_projection: true
   phase_symmetric: true
-  reflect_eta: false
 ```
 
 ### `objects`
@@ -101,7 +100,7 @@ Two outputs, hence three classes: 0 = rest, 1 = signal (HH), 2 = tt̄; the examp
 
 ### `training`
 
-All network settings at their defaults except `reflect_eta: false`.
+All network settings at their defaults.
 `examples/bbww/bbww_hyperparameters.yaml` writes every setting out ([Options.md](./Options.md)).
 
 ## Training, evaluation and export
