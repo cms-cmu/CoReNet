@@ -20,7 +20,7 @@ pixi shell                       # activate; or prefix every command with `pixi 
 ```
 
 pixi itself is a single static binary (`curl -fsSL https://pixi.sh/install.sh | sh`) that needs no root
-access, so the same commands work on a laptop and on a cluster front end.
+access. The environment is built for Linux (x86-64) with an NVIDIA GPU (CUDA 12).
 
 This installs the command-line tools `corenet-validate`, `corenet-train`, `corenet-evaluate`,
 `corenet-export` and `corenet-report` (each has `--help`), and the Python package `corenet`. The unit tests run with
