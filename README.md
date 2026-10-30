@@ -149,7 +149,8 @@ corenet-train --config examples/bbww/bbww.yaml --input examples/data/bbww_all.h5
 * `--freeze-epoch 15 --finetune-layers head_main. head_reduce. aux_heads. --finetune-lr 1.0e-3 --finetune-batch-size 4096`:
   the fine-tuning stage; from epoch 15 on only the parameters whose names start with the given prefixes
   (default: the output layers; `none` freezes nothing) are trained, at this learning rate and batch size
-  (default: the schedule continues).
+  (default: the schedule continues); `--finetune-reset-optimizer` starts a new optimizer and learning-rate
+  schedule at that epoch instead of continuing the main stage's.
 * `--epochs`, `--lr`, `--seed`, ...: override the training settings of the configuration file.
   See [docs/Options.md](docs/Options.md) or `corenet-train --help`.
 

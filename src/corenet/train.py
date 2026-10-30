@@ -78,6 +78,7 @@ RECIPE_DEFAULTS = {
     "finetune_layers": list(HEAD_PREFIXES),
     "finetune_lr": None,
     "finetune_batch_size": None,
+    "finetune_reset_optimizer": False,
 }
 
 
@@ -153,6 +154,18 @@ def freeze_heads(model: CoReNet, prefixes=HEAD_PREFIXES) -> int:
             f"finetune_layers {list(prefixes)}: no trainable parameter is left for the fine-tuning stage"
         )
     return n
+
+
+def _reset_optimizer(model: torch.nn.Module, lr: float, milestones, gamma: float):
+    """(optimizer, scheduler) of a fresh fine-tuning stage: a new Adam over the trainable parameters at
+    learning rate ``lr`` and a new MultiStepLR whose milestones count from the reset."""
+    optimizer = torch.optim.Adam(
+        [p for p in model.parameters() if p.requires_grad], lr=lr
+    )
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer, milestones=list(milestones), gamma=gamma
+    )  # milestones counted from the reset, as a fresh stage would
+    return optimizer, scheduler
 
 
 def count_trainable(model: torch.nn.Module) -> int:
@@ -356,6 +369,15 @@ def train_fold(
                 n_trainable = freeze_heads(model, args.finetune_layers)
             else:
                 n_trainable = count_trainable(model)
+            if args.finetune_reset_optimizer:
+                lr_now = (
+                    args.finetune_lr
+                    if args.finetune_lr is not None
+                    else optimizer.param_groups[0]["lr"]
+                )
+                optimizer, scheduler = _reset_optimizer(
+                    model, lr_now, args.lr_milestones, args.lr_gamma
+                )
             if args.finetune_lr is not None:
                 for group in optimizer.param_groups:
                     group["lr"] = args.finetune_lr
@@ -368,6 +390,7 @@ def train_fold(
                 )
                 + f", {n_trainable:,} trainable parameters, lr {optimizer.param_groups[0]['lr']:.2e}, "
                 f"batch size {bs}, {n_gb} ghost batches"
+                + (", optimizer reset" if args.finetune_reset_optimizer else "")
             )
         model.train()
         loss_sum, w_sum = 0.0, 0.0
@@ -570,6 +593,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="batch size from --freeze-epoch on [keep the schedule]",
     )
     g.add_argument(
+        "--finetune-reset-optimizer",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="at --freeze-epoch, start a new optimizer and learning-rate schedule over the trainable "
+        "parameters [off]",
+    )
+    g.add_argument(
         "--lr", type=float, help=f"Adam learning rate [{RECIPE_DEFAULTS['lr']}]"
     )
     g.add_argument(
@@ -672,6 +702,7 @@ def _check_recipe(r: dict) -> None:
             lambda x: x is None or (is_int(x) and x >= 1),
             "an integer >= 1",
         ),
+        "finetune_reset_optimizer": (lambda x: isinstance(x, bool), "true or false"),
     }
     for key, (ok, what) in rules.items():
         if key in r and not ok(r[key]):
