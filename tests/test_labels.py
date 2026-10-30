@@ -60,7 +60,9 @@ def test_labels_train_and_evaluate(tmp_path: Path) -> None:
             "cpu",
         ]
     )
-    ckpt = torch.load(out_dir / "model_fold0.pkl", map_location="cpu", weights_only=False)
+    ckpt = torch.load(
+        out_dir / "model_fold0.pkl", map_location="cpu", weights_only=False
+    )
     assert ckpt["classes"] == ["a", "b", "c"]
     with h5py.File(out_dir / "predictions_fold0.h5", "r") as f:
         assert f["class_probabilities"].shape[1] == 3

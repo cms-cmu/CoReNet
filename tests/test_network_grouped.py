@@ -48,7 +48,12 @@ def _check_grouping_invariance(model: CoReNet, inputs) -> int:
                     grouped = grouped.view(n, model.d, nt.n, len(js))
                     for i, j in enumerate(js):
                         alone = model.leaf_embed[role](hp["slot_feats"][node][j], add=a)
-                        assert torch.equal(grouped[:, :, :, i], alone), (h, node, role, j)
+                        assert torch.equal(grouped[:, :, :, i], alone), (
+                            h,
+                            node,
+                            role,
+                            j,
+                        )
                         # the presence is laid out the same way
                         assert torch.equal(
                             pres.view(n, nt.n, len(js))[:, :, i],
@@ -72,5 +77,8 @@ def test_grouped_embedding_eval_invariance_bbww(tmp_path):
         for h, T in model.tables.items()
         for node in model.levels[h]
     }
-    assert groups["W_lep"] == {"lepton": [0], "met": [1]}  # different roles: separate calls
+    assert groups["W_lep"] == {
+        "lepton": [0],
+        "met": [1],
+    }  # different roles: separate calls
     assert _check_grouping_invariance(model, inputs) > 0

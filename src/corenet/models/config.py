@@ -133,7 +133,9 @@ class NetworkSpec:
         default_factory=dict
     )  # node -> hypothesis in which it is declared
     min_jets: int = 4  # minimum jet multiplicity of the selection: nSelJets enters as log(nSelJets - (min_jets - 1))
-    labels: list[str] | None = None  # ``labels:``: the class names in label order (None: rest + outputs)
+    labels: list[str] | None = (
+        None  # ``labels:``: the class names in label order (None: rest + outputs)
+    )
 
     # ---- derived
     @property
@@ -464,7 +466,9 @@ def parse_config(cfg: dict) -> NetworkSpec:
     if labels is not None:
         labels = _str_list(labels, "labels")
         if len(labels) < 2:
-            raise ConfigError(f"labels: at least two classes are needed, got {labels!r}")
+            raise ConfigError(
+                f"labels: at least two classes are needed, got {labels!r}"
+            )
         for o in outputs:
             if o.name not in labels:
                 raise ConfigError(
