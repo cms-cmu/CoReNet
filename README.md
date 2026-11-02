@@ -272,12 +272,36 @@ class_probabilities, views_HH = sess.run(None, feeds)
 
 ## Contributors
 
-[to be added]
+- John Alison (Carnegie Mellon University)
+- Patrick Bryant (Carnegie Mellon University)
+- Alejandro Gomez Espinosa (Carnegie Mellon University)
+- Christian Guinto-Brody (Carnegie Mellon University)
+- Aniket Khanal (Carnegie Mellon University)
+- Chuyuan Liu (Carnegie Mellon University)
+- Sindhu Murthy (Carnegie Mellon University)
+- Guanglei Zhao (Carnegie Mellon University)
 
 ## Citation
 
-If you use this software for a publication, please cite it as given in [CITATION.cff](CITATION.cff)
-(to be completed) and the paper describing the method: [paper reference / arXiv to be added].
+If you use this software for a publication, please cite the paper describing the method:
+
+> J. Alison, P. Bryant, A. Gomez Espinosa, C. Guinto-Brody, A. Khanal, C. Liu, S. Murthy, and G. Zhao,
+> *Combinatorial Residual Network: a decay-chain-aware classifier without explicit jet assignment*,
+> [arXiv:2610.40749](https://arxiv.org/abs/2610.40749) [hep-ex] (2026).
+
+```bibtex
+@article{Alison:2026cak,
+    author = "Alison, John and Bryant, Patrick and Espinosa, Alejandro Gomez and Guinto-Brody, Christian and Khanal, Aniket and Liu, Chuyuan and Murthy, Sindhu and Zhao, Guanglei",
+    title = "{Combinatorial Residual Network: a decay-chain-aware classifier without explicit jet assignment}",
+    eprint = "2610.40749",
+    archivePrefix = "arXiv",
+    primaryClass = "hep-ex",
+    month = "10",
+    year = "2026"
+}
+```
+
+and the software itself as given in [CITATION.cff](CITATION.cff).
 The software is archived on Zenodo with the concept DOI
 [10.5281/zenodo.23577720](https://doi.org/10.5281/zenodo.23577720) (version 1.0.0:
 10.5281/zenodo.23577721); [CITATION.cff](CITATION.cff) holds the citation.

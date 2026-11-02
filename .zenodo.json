@@ -10,6 +10,7 @@
   "license": "MIT",
   "keywords": ["jet assignment", "Higgs boson pair production", "machine learning", "CMS", "CoReNet"],
   "related_identifiers": [
-    {"identifier": "10.5281/zenodo.23567532", "relation": "isSupplementedBy", "resource_type": "dataset"}
+    {"identifier": "10.5281/zenodo.23567532", "relation": "isSupplementedBy", "resource_type": "dataset"},
+    {"identifier": "10.48550/arXiv.2610.40749", "relation": "isSupplementTo", "resource_type": "publication-article"}
   ]
 }
